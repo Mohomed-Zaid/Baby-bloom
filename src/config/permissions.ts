@@ -1,0 +1,23 @@
+export const permissions = {
+  dashboardView: 'dashboard.view',
+  customersView: 'customers.view', customersCreate: 'customers.create', customersManage: 'customers.update',
+  vendorsView: 'vendors.view', vendorsCreate: 'vendors.create', vendorsManage: 'vendors.update',
+  productsView: 'products.view', productsCreate: 'products.create', productsManage: 'products.update',
+  accountingView: 'accounting.view', accountingManage: 'accounting.update',
+  bankingView: 'banking.view', bankingManage: 'banking.update',
+  staffManage: 'settings.update', settingsView: 'settings.view', settingsManage: 'settings.update',
+  invoicesManage: 'invoices.update', inventoryView: 'inventory.view', inventoryManage: 'inventory.update',
+  inventoryOpening: 'inventory.create_opening_stock', inventoryTransfer: 'inventory.create_transfer',
+  inventoryAdjustment: 'inventory.create_adjustment', inventoryDamage: 'inventory.record_damage',
+  inventoryWriteOff: 'inventory.write_off', inventorySubmit: 'inventory.submit', inventoryApprove: 'inventory.approve',
+  inventoryPost: 'inventory.post', inventoryReverse: 'inventory.reverse', inventoryBackdate: 'inventory.backdate',
+  inventoryNegativeOverride: 'inventory.negative_stock_override', inventoryViewCost: 'inventory.view_cost', inventoryExport: 'inventory.export', inventoryPrint: 'inventory.print',
+  purchasesView:'purchases.view',purchasesCreate:'purchases.create',purchasesUpdateDraft:'purchases.update_draft',purchasesSubmit:'purchases.submit',purchasesApprove:'purchases.approve',purchasesPost:'purchases.post',purchasesCancel:'purchases.cancel',purchasesReverse:'purchases.reverse',purchasesBackdate:'purchases.backdate',purchasesViewCost:'purchases.view_cost',purchasesPrint:'purchases.print',purchasesExport:'purchases.export',
+  purchaseReturnsView:'purchase_returns.view',purchaseReturnsCreate:'purchase_returns.create',purchaseReturnsSubmit:'purchase_returns.create',purchaseReturnsApprove:'purchase_returns.approve',purchaseReturnsPost:'purchase_returns.post',purchaseReturnsReverse:'purchase_returns.reverse',purchaseReturnsUnlinked:'purchase_returns.unlinked',
+  supplierPaymentsCreate:'supplier_payments.create',supplierPaymentsPost:'supplier_payments.post',supplierPaymentsReverse:'supplier_payments.reverse',vendorStatementsView:'vendor_statements.view',
+  financeManage: 'banking.update',
+  reportsView: 'reports.view',
+  communicationManage: 'sms.update',
+} as const
+
+export type PermissionKey = (typeof permissions)[keyof typeof permissions]

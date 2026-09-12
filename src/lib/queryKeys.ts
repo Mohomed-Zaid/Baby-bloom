@@ -1,0 +1,16 @@
+export const queryKeys = {
+  companies: { all: ['companies'] as const, current: () => ['companies', 'current'] as const },
+  branches: { all: ['branches'] as const, list: () => ['branches', 'list'] as const, detail: (id: string) => ['branches', 'detail', id] as const },
+  warehouses: { all: ['warehouses'] as const, byBranch: (branchId: string) => ['warehouses', 'branch', branchId] as const },
+  customers: { all: ['customers'] as const, list: (branchId?: string) => ['customers', 'list', branchId ?? 'all'] as const, detail: (id: string) => ['customers', 'detail', id] as const },
+  vendors: { all: ['vendors'] as const, list: (branchId?: string) => ['vendors', 'list', branchId ?? 'all'] as const, detail: (id: string) => ['vendors', 'detail', id] as const },
+  categories: { all: ['categories'] as const, list: () => ['categories', 'list'] as const },
+  brands: { all: ['brands'] as const, list: () => ['brands', 'list'] as const },
+  units: { all: ['units'] as const, list: () => ['units', 'list'] as const },
+  products: { all: ['products'] as const, list: () => ['products', 'list'] as const, detail: (id: string) => ['products', 'detail', id] as const },
+  productVariants: { all: ['product-variants'] as const, byProduct: (productId: string) => ['product-variants', 'product', productId] as const },
+  banks: { all: ['banks'] as const, branches: (bankId: string) => ['banks', bankId, 'branches'] as const },
+  bankAccounts: { all: ['bank-accounts'] as const, byBranch: (branchId: string) => ['bank-accounts', 'branch', branchId] as const },
+  chartOfAccounts: { all: ['chart-of-accounts'] as const, list: () => ['chart-of-accounts', 'list'] as const },
+  accessControl: { roles: () => ['access-control', 'roles'] as const, permissions: () => ['access-control', 'permissions'] as const },
+} as const
