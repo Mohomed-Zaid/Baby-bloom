@@ -103,11 +103,11 @@ create trigger product_barcodes_generate before insert on public.product_barcode
 create or replace function public.enforce_variant_price_permissions() returns trigger
 language plpgsql set search_path='' as $$
 begin
-  if not public.user_has_permission('products.view_cost') and (
+  if auth.uid() is not null and not public.user_has_permission('products.view_cost') and (
     (tg_op='INSERT' and (new.purchase_price<>0 or new.average_cost<>0 or new.minimum_price<>0)) or
     (tg_op='UPDATE' and (new.purchase_price is distinct from old.purchase_price or new.average_cost is distinct from old.average_cost or new.minimum_price is distinct from old.minimum_price))
   ) then raise exception 'products.view_cost is required to set cost fields' using errcode='42501'; end if;
-  if tg_op='UPDATE' and not public.user_has_permission('products.change_price') and (
+  if auth.uid() is not null and tg_op='UPDATE' and not public.user_has_permission('products.change_price') and (
     new.retail_price is distinct from old.retail_price or new.wholesale_price is distinct from old.wholesale_price or
     new.special_price is distinct from old.special_price or new.default_discount_percentage is distinct from old.default_discount_percentage
   ) then raise exception 'products.change_price is required to change selling prices' using errcode='42501'; end if;
