@@ -164,19 +164,32 @@ create trigger product_variants_barcode_crosscheck before insert or update of ba
 create trigger product_barcodes_barcode_crosscheck before insert or update of barcode, company_id on public.product_barcodes for each row execute function public.enforce_barcode_uniqueness();
 
 create function public.ensure_product_has_variant() returns trigger
-language plpgsql set search_path = '' as $$
-declare target_product uuid;
+language plpgsql security definer set search_path = '' as $$
+declare
+  target_product uuid;
 begin
-  if tg_table_name = 'products' then
-    target_product := case when tg_op = 'DELETE' then old.id else new.id end;
+  if tg_op = 'DELETE' then
+    if tg_table_name = 'products' then
+      target_product := old.id;
+    else
+      target_product := old.product_id;
+    end if;
   else
-    target_product := case when tg_op = 'DELETE' then old.product_id else new.product_id end;
+    if tg_table_name = 'products' then
+      target_product := new.id;
+    else
+      target_product := new.product_id;
+    end if;
   end if;
+
   if exists (select 1 from public.products p where p.id = target_product and p.deleted_at is null)
      and not exists (select 1 from public.product_variants v where v.product_id = target_product and v.deleted_at is null) then
     raise exception 'Every product must retain at least one variant';
   end if;
-  if tg_op = 'DELETE' then return old; end if;
+
+  if tg_op = 'DELETE' then
+    return old;
+  end if;
   return new;
 end;
 $$;

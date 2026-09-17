@@ -136,15 +136,36 @@ end; $$;
 
 -- Product plus mandatory first variant must commit in one transaction.
 create or replace function public.ensure_product_has_variant() returns trigger
-language plpgsql set search_path='' as $$
-declare target_product uuid;
+language plpgsql security definer set search_path = '' as $$
+declare
+  target_product uuid;
 begin
- target_product:=case when tg_table_name='products' then case when tg_op='DELETE' then old.id else new.id end else case when tg_op='DELETE' then old.product_id else new.product_id end end;
- if exists(select 1 from public.products p where p.id=target_product and p.deleted_at is null)
-    and not exists(select 1 from public.product_variants v where v.product_id=target_product and v.deleted_at is null and v.is_active)
- then raise exception 'Every product must retain at least one active sellable variant'; end if;
- return case when tg_op='DELETE' then old else new end;
-end; $$;
+  if tg_op = 'DELETE' then
+    if tg_table_name = 'products' then
+      target_product := old.id;
+    else
+      target_product := old.product_id;
+    end if;
+  else
+    if tg_table_name = 'products' then
+      target_product := new.id;
+    else
+      target_product := new.product_id;
+    end if;
+  end if;
+
+  if exists(select 1 from public.products p where p.id = target_product and p.deleted_at is null)
+     and not exists(select 1 from public.product_variants v where v.product_id = target_product and v.deleted_at is null and v.is_active)
+  then
+    raise exception 'Every product must retain at least one active sellable variant';
+  end if;
+
+  if tg_op = 'DELETE' then
+    return old;
+  end if;
+  return new;
+end;
+$$;
 
 create or replace function public.create_product_with_default_variant(p_product jsonb,p_variant jsonb) returns uuid
 language plpgsql security definer set search_path='' as $$

@@ -13,4 +13,8 @@ export const queryKeys = {
   bankAccounts: { all: ['bank-accounts'] as const, byBranch: (branchId: string) => ['bank-accounts', 'branch', branchId] as const },
   chartOfAccounts: { all: ['chart-of-accounts'] as const, list: () => ['chart-of-accounts', 'list'] as const },
   accessControl: { roles: () => ['access-control', 'roles'] as const, permissions: () => ['access-control', 'permissions'] as const },
+  sales: { all: ['sales'] as const, list: (f?: Record<string,unknown>) => ['sales','list',f] as const, detail: (id: string) => ['sales','detail',id] as const, held: (branchId?: string) => ['sales','held',branchId??'all'] as const },
+  salesReturns: { all: ['sales-returns'] as const, list: (page?: number) => ['sales-returns','list',page??1] as const },
+  customerStatements: { balance: (search?: string) => ['customer-balance',search??''] as const, statement: (id: string) => ['customer-statement',id] as const },
+  invoicePayments: { all: ['invoice-payments'] as const },
 } as const

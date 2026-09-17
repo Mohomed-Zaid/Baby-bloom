@@ -51,27 +51,26 @@ export const navigation: NavigationItem[] = [
     ],
   },
   {
-    title: 'New Create',
+    title: 'Create New',
     icon: CirclePlus,
     children: [
-      { title: 'Customer', path: '/customers/new', permission: permissions.customersCreate },
-      { title: 'Vendor', path: '/vendors/new', permission: permissions.vendorsCreate },
-      { title: 'Product', path: '/products/new', permission: permissions.productsCreate },
       { title: 'Purchase', path: '/purchases/new', permission: permissions.purchasesCreate },
       { title: 'Purchase Return', path: '/purchase-returns', permission: permissions.purchaseReturnsCreate },
-      ...children('create', permissions.productsManage, ['Category', 'Brand', 'Unit', 'Variant']),
-      ...children('create', permissions.accountingManage, ['Journal', 'Ledger', 'Cheque Book & Card']),
+      ...children('create', permissions.accountingManage, ['Journal', 'Cheque Book & Card']),
       ...children('create', permissions.staffManage, ['Staff', 'User Privilege']),
-      ...children('create', permissions.settingsManage, ['Branch Details', 'Bank & Branch']),
-      ...children('create', permissions.productsManage, ['Add Barcode', 'Generate Barcode']),
+      ...children('create', permissions.settingsManage, ['Branch Details']),
     ],
   },
   {
     title: 'Invoice',
     icon: ReceiptText,
-    children: children('invoice', permissions.invoicesManage, [
-      'New Invoice', 'Invoice History', 'Held Bills', 'Sales Return', 'Refunds',
-    ]),
+    children: [
+      { title: 'New Invoice', path: '/sales/pos', permission: permissions.salesCreate },
+      { title: 'Invoice History', path: '/sales/invoices', permission: permissions.salesView },
+      { title: 'Held Bills', path: '/sales/held', permission: permissions.salesCreate },
+      { title: 'Sales Return', path: '/sales/returns', permission: permissions.salesReturnsCreate },
+      ...children('invoice', permissions.invoicesManage, ['Refunds']),
+    ],
   },
   {
     title: 'Inventory',
@@ -87,6 +86,7 @@ export const navigation: NavigationItem[] = [
       { title:'Low Stock',path:'/inventory/low-stock',permission:permissions.inventoryView },
       { title:'Stock Movement',path:'/inventory/stock-movement',permission:permissions.inventoryView },
       { title:'Inventory Valuation',path:'/inventory/valuation',permission:permissions.inventoryView },
+      { title:'Generate Barcode',path:'/inventory/generate-barcode',permission:permissions.productsView },
       { title:'New Purchase',path:'/purchases/new',permission:permissions.purchasesCreate },
       { title:'Purchase History',path:'/purchases',permission:permissions.purchasesView },
       { title:'Purchase Returns',path:'/purchase-returns',permission:permissions.purchaseReturnsView },
@@ -97,23 +97,33 @@ export const navigation: NavigationItem[] = [
     title: 'Finance',
     icon: BadgeDollarSign,
     children: [
+      { title:'Customer Balances',path:'/customers/balances',permission:permissions.customerStatementsView },
+      { title:'Customer Statement',path:'/customers/statement',permission:permissions.customerStatementsView },
       { title:'Supplier Balances',path:'/suppliers/balances',permission:permissions.vendorStatementsView },
       { title:'Supplier Statement',path:'/suppliers/statement',permission:permissions.vendorStatementsView },
       { title:'Supplier Payments',path:'/supplier-payments',permission:permissions.supplierPaymentsCreate },
+      { title:'Journal Entry',path:'/finance/journals',permission:permissions.accountingView },
+      { title:'Cheque Administration',path:'/banking/cheques',permission:permissions.bankingView },
+      { title:'Credit & Debit Note',path:'/finance/journals',permission:permissions.accountingView },
+      { title:'User Privilege Matrix',path:'/admin/security',permission:permissions.settingsManage },
+      { title:'Counter & Shift Admin',path:'/admin/counters',permission:permissions.settingsManage },
       ...children('finance', permissions.financeManage, [
-      'Receivables', 'Receive Payment', 'Payables', 'Income', 'Expenses',
-      'Journal Entry', 'Cheque Administration', 'Bank Reconciliation', 'Credit & Debit Note',
-      'Cash Book', 'Bank Book', 'Chart of Accounts',
+        'Receivables', 'Receive Payment', 'Payables', 'Income', 'Expenses',
+        'Bank Reconciliation', 'Cash Book', 'Bank Book', 'Chart of Accounts',
       ]),
     ],
   },
   {
     title: 'Reports',
     icon: PackageOpen,
-    children: children('reports', permissions.reportsView, [
-      'Sales Reports', 'Purchase Reports', 'Inventory Reports', 'Profit Reports', 'Finance Reports',
-      'Customer Reports', 'Supplier Reports', 'Staff Reports', 'Accounting Reports', 'Audit Reports',
-    ]),
+    children: [
+      { title:'Finance Reports',path:'/finance/reports',permission:permissions.reportsView },
+      { title:'Accounting Reports',path:'/finance/reports',permission:permissions.reportsView },
+      ...children('reports', permissions.reportsView, [
+        'Sales Reports', 'Purchase Reports', 'Inventory Reports', 'Profit Reports',
+        'Customer Reports', 'Supplier Reports', 'Staff Reports', 'Audit Reports',
+      ]),
+    ],
   },
   {
     title: 'Communication',
@@ -123,9 +133,14 @@ export const navigation: NavigationItem[] = [
   {
     title: 'Extras',
     icon: Settings2,
-    children: children('extras', permissions.settingsManage, [
-      'Price Change', 'Shortcut Keys', 'Barcode Labels', 'Backup & Restore', 'Activity Log', 'System Settings',
-    ]),
+    children: [
+      { title: 'Price Check', path: '/extras/price-check', permission: permissions.productsView },
+      { title: 'Shortcut Keys', path: '/extras/shortcut-keys', permission: permissions.settingsManage },
+      { title: 'Barcode Labels', path: '/extras/barcode-labels', permission: permissions.productsView },
+      ...children('extras', permissions.settingsManage, [
+        'Backup & Restore', 'Activity Log', 'System Settings',
+      ]),
+    ],
   },
   { title: 'Logout', path: '/login', icon: LogOut },
 ]

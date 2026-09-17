@@ -89,20 +89,25 @@ begin
 end;
 $$;
 create function public.validate_same_company_references() returns trigger
-language plpgsql set search_path = '' as $$
+language plpgsql security definer set search_path = '' as $$
 declare
   new_json jsonb := to_jsonb(new);
   ref_id uuid;
   ref_company uuid;
   i integer := 0;
   allow_global boolean;
+  row_exists boolean;
 begin
   while i < tg_nargs loop
     ref_id := nullif(new_json ->> tg_argv[i], '')::uuid;
     allow_global := coalesce(tg_argv[i + 2]::boolean, false);
     if ref_id is not null then
-      execute format('select company_id from public.%I where id = $1', tg_argv[i + 1]) into ref_company using ref_id;
-      if not found or (ref_company is distinct from new.company_id and not (allow_global and ref_company is null)) then
+      ref_company := null;
+      row_exists := false;
+      execute format('select true, company_id from public.%I where id = $1', tg_argv[i + 1])
+        into row_exists, ref_company
+        using ref_id;
+      if not coalesce(row_exists, false) or (ref_company is distinct from new.company_id and not (allow_global and ref_company is null)) then
         raise exception 'Cross-company reference rejected for %.%', tg_table_name, tg_argv[i];
       end if;
     end if;
@@ -113,7 +118,7 @@ end;
 $$;
 
 create function public.validate_bank_references() returns trigger
-language plpgsql set search_path = '' as $$
+language plpgsql security definer set search_path = '' as $$
 begin
   if new.bank_branch_id is not null and not exists (
     select 1 from public.bank_branches bb
