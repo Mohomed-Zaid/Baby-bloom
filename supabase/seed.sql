@@ -227,11 +227,13 @@ begin
 
   select id into v_acc_comb from public.chart_of_accounts where company_id = v_company_id and account_code = '1020';
   if not exists (select 1 from public.bank_accounts where company_id = v_company_id and account_number = '8001234567') then
-    insert into public.bank_accounts (
-      company_id, branch_id, bank_id, bank_branch_id, account_name, account_number, account_type, ledger_account_id, is_default, is_active
-    ) values (
-      v_company_id, v_branch_main_id, v_bank_comb, v_bbranch_comb, 'Commercial Bank Corporate A/C', '8001234567', 'Current', v_acc_comb, true, true
-    );
+    if exists (select 1 from information_schema.columns where table_schema='public' and table_name='bank_accounts' and column_name='account_kind') then
+      execute 'insert into public.bank_accounts (company_id, branch_id, bank_id, bank_branch_id, account_name, account_number, account_kind, ledger_account_id, is_default, is_active) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)'
+      using v_company_id, v_branch_main_id, v_bank_comb, v_bbranch_comb, 'Commercial Bank Corporate A/C', '8001234567', 'Current', v_acc_comb, true, true;
+    else
+      execute 'insert into public.bank_accounts (company_id, branch_id, bank_id, bank_branch_id, account_name, account_number, account_type, ledger_account_id, is_default, is_active) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)'
+      using v_company_id, v_branch_main_id, v_bank_comb, v_bbranch_comb, 'Commercial Bank Corporate A/C', '8001234567', 'Current', v_acc_comb, true, true;
+    end if;
   end if;
 
   -- Hatton National Bank
@@ -251,11 +253,13 @@ begin
 
   select id into v_acc_hnb from public.chart_of_accounts where company_id = v_company_id and account_code = '1030';
   if not exists (select 1 from public.bank_accounts where company_id = v_company_id and account_number = '0030104567') then
-    insert into public.bank_accounts (
-      company_id, branch_id, bank_id, bank_branch_id, account_name, account_number, account_type, ledger_account_id, is_default, is_active
-    ) values (
-      v_company_id, v_branch_ne_id, v_bank_hnb, v_bbranch_hnb, 'HNB Branch Operating A/C', '0030104567', 'Savings', v_acc_hnb, true, true
-    );
+    if exists (select 1 from information_schema.columns where table_schema='public' and table_name='bank_accounts' and column_name='account_kind') then
+      execute 'insert into public.bank_accounts (company_id, branch_id, bank_id, bank_branch_id, account_name, account_number, account_kind, ledger_account_id, is_default, is_active) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)'
+      using v_company_id, v_branch_ne_id, v_bank_hnb, v_bbranch_hnb, 'HNB Branch Operating A/C', '0030104567', 'Savings', v_acc_hnb, true, true;
+    else
+      execute 'insert into public.bank_accounts (company_id, branch_id, bank_id, bank_branch_id, account_name, account_number, account_type, ledger_account_id, is_default, is_active) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)'
+      using v_company_id, v_branch_ne_id, v_bank_hnb, v_bbranch_hnb, 'HNB Branch Operating A/C', '0030104567', 'Savings', v_acc_hnb, true, true;
+    end if;
   end if;
 
   -- --------------------------------------------------------------------------
