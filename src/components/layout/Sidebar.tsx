@@ -29,7 +29,7 @@ export function Sidebar({ mobile = false, onNavigate }: SidebarProps) {
         {!collapsed && <span className="brand-copy"><strong>{branding.name}</strong><small>{branding.productName}</small></span>}
       </div>
       <nav className="sidebar-nav">
-        {navigation.filter((item) => !user || !item.permission || user.permissions.includes(item.permission) || item.children?.some((child) => !child.permission || user.permissions.includes(child.permission))).map((item) => {
+        {navigation.filter((item) => !item.permission || user?.permissions.includes(item.permission) || item.children?.some((child) => !child.permission || user?.permissions.includes(child.permission))).map((item) => {
           const Icon = item.icon
           if (item.children) {
             const isOpen = expanded.includes(item.title) || activeSections.includes(item.title)
@@ -42,7 +42,7 @@ export function Sidebar({ mobile = false, onNavigate }: SidebarProps) {
                 </button>
                 {!collapsed && isOpen && (
                   <div className="nav-children">
-                    {item.children.filter((child) => !user || !child.permission || user.permissions.includes(child.permission)).map((child) => <NavLink key={child.path} to={child.path ?? '/'} onClick={onNavigate} className={({ isActive: childActive }) => childActive ? 'active' : ''}>{child.title}</NavLink>)}
+                    {item.children.filter((child) => !child.permission || user?.permissions.includes(child.permission)).map((child) => <NavLink key={child.path} to={child.path ?? '/'} onClick={onNavigate} className={({ isActive: childActive }) => childActive ? 'active' : ''}>{child.title}</NavLink>)}
                   </div>
                 )}
               </div>

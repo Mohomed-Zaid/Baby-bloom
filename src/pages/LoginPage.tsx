@@ -1,11 +1,12 @@
-﻿import { zodResolver } from '@hookform/resolvers/zod'
-import { Eye, EyeOff, LockKeyhole } from 'lucide-react'
-import { useState } from 'react'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { Eye, EyeOff, LockKeyhole, ShieldAlert } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { z } from 'zod'
 import { branding } from '../config/branding'
 import { supabase } from '../lib/supabase'
+import { useAuthStore } from '../stores/authStore'
 
 const loginSchema = z.object({
   identity: z.string().trim().min(1, 'Enter your email or username.'),
@@ -16,15 +17,73 @@ type LoginValues = z.infer<typeof loginSchema>
 
 export function LoginPage() {
   const navigate = useNavigate()
+  const user = useAuthStore((state) => state.user)
+  const isInitialized = useAuthStore((state) => state.isInitialized)
   const [showPassword, setShowPassword] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
-  const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<LoginValues>({ resolver: zodResolver(loginSchema), defaultValues: { identity: '', password: '', remember: false } })
+  const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<LoginValues>({
+    resolver: zodResolver(loginSchema),
+    defaultValues: { identity: '', password: '', remember: false },
+  })
+
+  // If already authenticated as a real user, redirect to dashboard
+  useEffect(() => {
+    if (isInitialized && user) {
+      navigate('/dashboard', { replace: true })
+    }
+  }, [isInitialized, user, navigate])
 
   const submit = async (values: LoginValues) => {
-    if (!supabase) { setNotice('Supabase is not configured for this environment.'); return }
-    if (!values.identity.includes('@')) { setNotice('Enter the email linked to this staff username.'); return }
-    const { error } = await supabase.auth.signInWithPassword({ email: values.identity, password: values.password })
-    if (error) { setNotice(error.message); return }
+    setNotice(null)
+    if (!supabase) {
+      setNotice('Supabase is not configured for this environment.')
+      return
+    }
+    if (!values.identity.includes('@')) {
+      setNotice('Enter the email linked to this staff account.')
+      return
+    }
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: values.identity.trim(),
+      password: values.password,
+    })
+
+    if (error) {
+      setNotice(error.message)
+      return
+    }
+
+    const authUser = data.user
+    if (!authUser) {
+      setNotice('Unable to authenticate credentials.')
+      return
+    }
+
+    const normalizedEmail = (authUser.email ?? values.identity).toLowerCase().trim()
+    const isAdminEmail = normalizedEmail === 'zaidn2848@gmail.com' || normalizedEmail === 'babybloom@gmail.com'
+
+    // Strict validation: Only real registered staff accounts (in public.profiles) or designated admins are permitted
+    const { data: rawProfile, error: profileError } = await supabase
+      .from('profiles')
+      .select('id, full_name, status')
+      .eq('id', authUser.id)
+      .maybeSingle()
+
+    const profile = rawProfile as unknown as { id: string; full_name: string; status?: string } | null
+
+    if ((!profile || profileError) && !isAdminEmail) {
+      await supabase.auth.signOut()
+      setNotice('Access denied: Guest or unregistered accounts cannot log in. Only registered staff members are permitted.')
+      return
+    }
+
+    if (profile && profile.status && profile.status !== 'active' && !isAdminEmail) {
+      await supabase.auth.signOut()
+      setNotice('Access denied: Your staff account is deactivated. Please contact your system administrator.')
+      return
+    }
+
     navigate('/dashboard', { replace: true })
   }
 
@@ -38,7 +97,7 @@ export function LoginPage() {
       <section className="login-form-panel">
         <div className="login-form-wrap">
           <div className="mobile-login-brand"><img className="brand-logo brand-logo-mobile" src={branding.logoPath} alt={branding.name} /><strong>{branding.name}</strong></div>
-          <span className="eyebrow">Welcome back</span><h2>Sign in to your workspace</h2><p className="form-intro">Use your staff account to continue.</p>
+          <span className="eyebrow">Welcome back</span><h2>Sign in to your workspace</h2><p className="form-intro">Use your registered staff account to continue.</p>
           <form onSubmit={(event) => void handleSubmit(submit)(event)} noValidate>
             <label className="field-label" htmlFor="identity">Email or username</label>
             <input className="text-input" id="identity" autoComplete="username" autoFocus {...register('identity')} aria-invalid={Boolean(errors.identity)} />
@@ -48,10 +107,14 @@ export function LoginPage() {
             {errors.password && <p className="field-error">{errors.password.message}</p>}
             <div className="form-options"><label className="checkbox-label"><input type="checkbox" {...register('remember')} /> Remember me</label><a href="#forgotten-password" onClick={(event) => event.preventDefault()}>Forgotten password?</a></div>
             <button className="button primary login-button" type="submit" disabled={isSubmitting}>Sign in</button>
-            {notice && <p className="login-notice" role="status">{notice}</p>}
+            {notice && (
+              <p className="login-notice" role="status" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <ShieldAlert size={16} style={{ flexShrink: 0 }} />
+                <span>{notice}</span>
+              </p>
+            )}
           </form>
-          <div className="two-step"><LockKeyhole size={18} /><span><strong>Two-step verification</strong><small>Will be available after authentication setup.</small></span></div>
-          <Link className="preview-link" to="/dashboard">Preview application shell</Link>
+          <div className="two-step"><LockKeyhole size={18} /><span><strong>Two-step verification</strong><small>Staff authentication required. Guest logins disabled.</small></span></div>
         </div>
       </section>
     </main>

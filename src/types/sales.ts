@@ -7,7 +7,7 @@ export type SalesDiscountType = 'none' | 'percentage' | 'fixed'
 export type CustomerPaymentMethod = 'cash' | 'card' | 'cheque' | 'bank_transfer' | 'customer_credit'
 export type CustomerLedgerEntryType = 'opening_balance' | 'invoice' | 'payment' | 'sales_return' | 'credit_note' | 'cheque_return' | 'reversal'
 export type InvoicePaymentRecordStatus = 'draft' | 'posted' | 'cancelled' | 'reversed'
-export type SalesReturnSettlementType = 'reduce_receivable' | 'customer_refund' | 'customer_credit'
+export type SalesReturnSettlementType = 'reduce_receivable' | 'customer_refund' | 'customer_credit' | 'cash_refund' | 'bank_refund'
 export type StockMovementTypeSales = 'sale_out' | 'sale_return_in'
 
 // ──────────────────────────────── INVOICE ─────────────────────────────────
@@ -70,11 +70,26 @@ export interface CustomerStatement {
 
 export interface SalesReturnRow {
   id: string; company_id: string; branch_id: string; warehouse_id: string; stock_location_id: string
-  return_number: string; invoice_id: string | null; customer_id: string; return_date: string
+  return_number: string; invoice_id: string | null; sales_invoice_id: string | null; customer_id: string; return_date: string
   status: SalesDocumentStatus; subtotal: number; discount_total: number; tax_total: number; grand_total: number
-  settlement_type: SalesReturnSettlementType; refund_amount: number; balance_adjustment: number
+  settlement_type: SalesReturnSettlementType; refund_amount: number; credit_note_amount: number; balance_adjustment: number
   reason: string; notes: string | null; reversal_of_id: string | null; created_at: string; posted_at: string | null
   customer_code: string; customer_name: string; branch_name: string; warehouse_name: string; location_name: string; invoice_number: string | null; created_user: string | null
+}
+
+export interface SalesReturnItemDetail {
+  id: string; company_id: string; sales_return_id: string; original_invoice_item_id: string | null
+  product_variant_id: string; quantity: number; unit_price: number; cost_price: number
+  discount_amount: number; tax_amount: number; line_total: number; batch_reference: string | null
+  reason: string; condition?: string | null; restock_condition: 'good' | 'damaged' | 'write_off'; remarks: string | null
+  product_code: string; product_name: string; variant_name: string; sku: string; barcode: string | null
+}
+
+export interface CustomerRefundRow {
+  id: string; company_id: string; branch_id: string; sales_return_id: string; customer_id: string
+  refund_date: string; payment_method: 'cash' | 'bank_transfer' | 'card'; amount: number
+  bank_account_id: string | null; reference_number: string | null; notes: string | null; created_at: string
+  customer_code?: string; customer_name?: string; branch_name?: string; return_number?: string; bank_account_name?: string; created_user?: string | null
 }
 
 export interface SalesReturnEligibility {
@@ -90,7 +105,7 @@ export interface PosProduct {
   product_variant_id: string; product_id: string; product_code: string; product_name: string
   variant_name: string; sku: string; barcode: string | null; base_unit_id: string; unit_name: string
   retail_price: number; wholesale_price: number; special_price: number; last_cost: number | null
-  available_quantity: number; track_stock: boolean; allow_negative_stock: boolean; tax_rate: number
+  available_quantity: number; company_available_quantity?: number; track_stock: boolean; allow_negative_stock: boolean; tax_rate: number
 }
 
 export interface PosCartLine {

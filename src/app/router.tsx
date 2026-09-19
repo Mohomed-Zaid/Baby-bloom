@@ -1,5 +1,6 @@
 import { Navigate, createBrowserRouter } from 'react-router-dom'
 import { AppLayout } from '../components/layout/AppLayout'
+import { ProtectedRoute } from '../components/common/ProtectedRoute'
 import { moduleRoutes } from '../config/navigation'
 import { DashboardPage } from '../pages/DashboardPage'
 import { LoginPage } from '../pages/LoginPage'
@@ -24,6 +25,21 @@ import { FinancialReportsPage } from '../pages/FinancialReportsPage'
 import { BarcodeGeneratorPage } from '../pages/BarcodeGeneratorPage'
 import { ShortcutKeysPage } from '../pages/ShortcutKeysPage'
 import { PriceCheckPage } from '../pages/PriceCheckPage'
+import { PosShiftPage } from '../pages/PosShiftPage'
+import { PettyCashPage } from '../pages/PettyCashPage'
+import { AuditTrailPage } from '../pages/AuditTrailPage'
+import { CustomerOrdersPage } from '../pages/CustomerOrdersPage'
+import { NewCustomerOrderPage } from '../pages/NewCustomerOrderPage'
+import { InTransitTransfersPage } from '../pages/InTransitTransfersPage'
+import { ChartOfAccountsPage } from '../pages/ChartOfAccountsPage'
+import { CustomerReceivablesPage } from '../pages/CustomerReceivablesPage'
+import { VendorPayablesPage } from '../pages/VendorPayablesPage'
+import { DirectIncomeExpensePage } from '../pages/DirectIncomeExpensePage'
+import { CashBankBookPage } from '../pages/CashBankBookPage'
+import { BankReconciliationPage } from '../pages/BankReconciliationPage'
+import { StaffPage } from '../pages/StaffPage'
+import { SalesReturnsPage } from '../pages/SalesReturnsPage'
+import { NewSalesReturnPage } from '../pages/NewSalesReturnPage'
 
 const masterPages = [
   ['customers','customers'],['vendors','vendors'],['categories','categories'],['brands','brands'],['units','units'],
@@ -37,7 +53,15 @@ const implementedPrefixes = [
   '/inventory/products','/inventory/current-stock','/inventory/opening-stock','/inventory/stock-transfer',
   '/inventory/stock-adjustment','/inventory/damaged-stock','/inventory/stock-write-off',
   '/inventory/low-stock','/inventory/stock-movement','/inventory/valuation','/inventory/generate-barcode',
-  '/sales/pos','/sales/invoices','/sales/held','/sales/returns',
+  '/sales/pos','/sales/invoices','/sales/held','/sales/returns','/sales/new-return',
+  '/sales/orders','/sales/new-order',
+  '/admin/staff','/create/staff',
+  '/inventory/customer-orders','/inventory/order-delivery','/inventory/transfers/in-transit',
+  '/pos/shift','/invoice/shift-and-cash-drawer',
+  '/finance/petty-cash','/finance/petty-cash-vouchers',
+  '/finance/chart-of-accounts','/finance/receivables','/finance/receive-payments','/finance/payables',
+  '/finance/income','/finance/expenses','/finance/cash-book','/finance/bank-book','/finance/bank-reconciliation',
+  '/admin/audit-trail','/extras/activity-log','/extras/security-audit-trail',
   '/admin/security','/admin/counters','/banking/cheques','/finance/journals','/finance/reports',
   '/create/user-privilege','/create/branch-details','/create/cheque-book-and-card','/create/journal',
   '/finance/journal-entry','/finance/cheque-administration','/finance/credit-and-debit-note',
@@ -50,7 +74,7 @@ export const router = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
   {
     path: '/',
-    element: <AppLayout />,
+    element: <ProtectedRoute><AppLayout /></ProtectedRoute>,
     children: [
       { index: true, element: <Navigate to="/dashboard" replace /> },
       { path: 'dashboard', element: <DashboardPage /> },
@@ -60,6 +84,9 @@ export const router = createBrowserRouter([
       { path: 'inventory/opening-stock', element: <InventoryDocumentsPage kind="opening_stock" /> },
       { path: 'inventory/beginning-stock', element: <Navigate to="/inventory/opening-stock" replace /> },
       { path: 'inventory/stock-transfer', element: <InventoryDocumentsPage kind="stock_transfer" /> },
+      { path: 'inventory/transfers/in-transit', element: <InTransitTransfersPage /> },
+      { path: 'inventory/customer-orders', element: <CustomerOrdersPage /> },
+      { path: 'inventory/order-delivery', element: <CustomerOrdersPage /> },
       { path: 'inventory/stock-adjustment', element: <InventoryDocumentsPage kind="stock_adjustment_in" /> },
       { path: 'inventory/damaged-stock', element: <InventoryDocumentsPage kind="damaged_stock" /> },
       { path: 'inventory/stock-write-off', element: <InventoryDocumentsPage kind="stock_write_off" /> },
@@ -75,10 +102,17 @@ export const router = createBrowserRouter([
       { path: 'suppliers/statement', element: <SupplierAccountsPage mode='statement' /> },
       // Sales routes
       { path: 'sales/pos', element: <SalesPOSPage /> },
+      { path: 'sales/orders', element: <CustomerOrdersPage /> },
+      { path: 'sales/new-order', element: <NewCustomerOrderPage /> },
+      { path: 'pos/shift', element: <PosShiftPage /> },
+      { path: 'invoice/shift-and-cash-drawer', element: <PosShiftPage /> },
       { path: 'sales/invoices/:id', element: <SalesInvoicesPage /> },
       { path: 'sales/invoices', element: <SalesInvoicesPage /> },
       { path: 'sales/held', element: <SalesPOSPage /> },
-      { path: 'sales/returns', element: <PlaceholderPage title='Sales Returns' section='Invoice' permission='sales_returns.create' /> },
+      { path: 'sales/returns', element: <SalesReturnsPage /> },
+      { path: 'sales/new-return', element: <NewSalesReturnPage /> },
+      { path: 'admin/staff', element: <StaffPage /> },
+      { path: 'create/staff', element: <StaffPage /> },
       // Phase 7 Admin, Banking & Finance routes
       { path: 'admin/security', element: <SecurityMatrixPage /> },
       { path: 'create/user-privilege', element: <SecurityMatrixPage /> },
@@ -87,6 +121,8 @@ export const router = createBrowserRouter([
       { path: 'banking/cheques', element: <ChequeRegistryPage /> },
       { path: 'create/cheque-book-and-card', element: <ChequeRegistryPage /> },
       { path: 'finance/cheque-administration', element: <ChequeRegistryPage /> },
+      { path: 'finance/petty-cash', element: <PettyCashPage /> },
+      { path: 'finance/petty-cash-vouchers', element: <PettyCashPage /> },
       { path: 'finance/journals', element: <JournalEntriesPage /> },
       { path: 'create/journal', element: <JournalEntriesPage /> },
       { path: 'finance/journal-entry', element: <JournalEntriesPage /> },
@@ -94,6 +130,19 @@ export const router = createBrowserRouter([
       { path: 'finance/reports', element: <FinancialReportsPage /> },
       { path: 'reports/finance-reports', element: <FinancialReportsPage /> },
       { path: 'reports/accounting-reports', element: <FinancialReportsPage /> },
+      // Phase 13 Core Financial Engine & Subledgers
+      { path: 'finance/chart-of-accounts', element: <ChartOfAccountsPage /> },
+      { path: 'finance/receivables', element: <CustomerReceivablesPage /> },
+      { path: 'finance/receive-payments', element: <CustomerReceivablesPage /> },
+      { path: 'finance/payables', element: <VendorPayablesPage /> },
+      { path: 'finance/income', element: <DirectIncomeExpensePage /> },
+      { path: 'finance/expenses', element: <DirectIncomeExpensePage /> },
+      { path: 'finance/cash-book', element: <CashBankBookPage /> },
+      { path: 'finance/bank-book', element: <CashBankBookPage /> },
+      { path: 'finance/bank-reconciliation', element: <BankReconciliationPage /> },
+      { path: 'admin/audit-trail', element: <AuditTrailPage /> },
+      { path: 'extras/activity-log', element: <AuditTrailPage /> },
+      { path: 'extras/security-audit-trail', element: <AuditTrailPage /> },
 
       // Phase 9 Barcode & POS Extras routes
       { path: 'inventory/generate-barcode', element: <BarcodeGeneratorPage /> },

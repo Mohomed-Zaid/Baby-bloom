@@ -57,3 +57,129 @@ export async function listStockMovements(filters:InventoryFilters):Promise<Inven
  if(filters.branchId)query=query.eq('branch_id',filters.branchId);if(filters.warehouseId)query=query.eq('warehouse_id',filters.warehouseId);if(filters.locationId)query=query.eq('stock_location_id',filters.locationId);if(filters.movementType)query=query.eq('movement_type',filters.movementType);if(filters.dateFrom)query=query.gte('movement_date',filters.dateFrom);if(filters.dateTo)query=query.lte('movement_date',filters.dateTo)
  const {data,error,count}=await query;throwOnError(error);return{rows:(data??[]) as StockMovementRow[],count:count??0}
 }
+
+export interface AddVariantOpeningStockInput {
+  variantId: string
+  quantity: number
+  unitCost?: number
+  branchId?: string
+  warehouseId?: string
+  locationId?: string
+  notes?: string
+}
+
+export async function addVariantOpeningStock(input: AddVariantOpeningStockInput): Promise<InventoryActionResult> {
+  const client = requireSupabase()
+  const companyId = await currentCompanyId()
+
+  let branchId = input.branchId
+  if (!branchId) {
+    const { data: branches, error: branchErr } = await client
+      .from('branches')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('is_active', true)
+      .order('is_head_office', { ascending: false })
+      .limit(1)
+    throwOnError(branchErr)
+    const bRow = branches?.[0] as unknown as { id: string } | undefined
+    if (!bRow?.id) throw new Error('No active branch found to assign stock.')
+    branchId = bRow.id
+  }
+
+  let warehouseId = input.warehouseId
+  if (!warehouseId) {
+    const { data: warehouses, error: whErr } = await client
+      .from('warehouses')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('branch_id', branchId)
+      .eq('is_active', true)
+      .order('is_default', { ascending: false })
+      .limit(1)
+    throwOnError(whErr)
+    const wRow = warehouses?.[0] as unknown as { id: string } | undefined
+    if (!wRow?.id) throw new Error('No active warehouse found in branch.')
+    warehouseId = wRow.id
+  }
+
+  let locationId = input.locationId
+  if (!locationId) {
+    const { data: locations, error: locErr } = await client
+      .from('stock_locations')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('warehouse_id', warehouseId)
+      .eq('is_active', true)
+      .order('name')
+      .limit(1)
+    throwOnError(locErr)
+    const lRow = locations?.[0] as unknown as { id: string } | undefined
+    if (lRow?.id) {
+      locationId = lRow.id
+    } else {
+      // Fallback to any active stock location in the company
+      const { data: anyLoc } = await client
+        .from('stock_locations')
+        .select('id, branch_id, warehouse_id')
+        .eq('company_id', companyId)
+        .eq('is_active', true)
+        .order('name')
+        .limit(1)
+      const anyRow = anyLoc?.[0] as unknown as { id: string; branch_id: string; warehouse_id: string } | undefined
+      if (anyRow?.id) {
+        locationId = anyRow.id
+        branchId = anyRow.branch_id
+        warehouseId = anyRow.warehouse_id
+      } else {
+        // Auto-create a default location
+        const { data: newLoc, error: createLocErr } = await client
+          .from('stock_locations')
+          .insert({
+            company_id: companyId,
+            branch_id: branchId,
+            warehouse_id: warehouseId,
+            code: 'LOC-01',
+            name: 'Main Storage',
+            is_active: true,
+          } as never)
+          .select('id')
+          .single()
+        throwOnError(createLocErr)
+        locationId = (newLoc as unknown as { id: string }).id
+      }
+    }
+  }
+
+  if (!branchId || !warehouseId || !locationId) {
+    throw new Error('Branch, warehouse, or stock location could not be determined.')
+  }
+
+  const finalBranchId: string = branchId
+  const finalWarehouseId: string = warehouseId
+  const finalLocationId: string = locationId
+
+  const effectiveCost = (input.unitCost && Number(input.unitCost) > 0) ? Number(input.unitCost) : 1
+  const today: string = new Date().toISOString().slice(0, 10)
+
+  const documentId = await createInventoryDraft({
+    branch_id: finalBranchId,
+    warehouse_id: finalWarehouseId,
+    document_type: 'opening_stock',
+    document_date: today,
+    notes: input.notes || 'Opening stock added directly from variant',
+    reason: 'Initial variant stock',
+    items: [{
+      product_variant_id: input.variantId,
+      source_location_id: finalLocationId,
+      quantity: input.quantity,
+      unit_cost: effectiveCost,
+    }],
+  })
+
+  await inventoryAction('submit', { id: documentId, branch_id: finalBranchId, document_type: 'opening_stock' } as InventoryDocument)
+  await inventoryAction('approve', { id: documentId, branch_id: finalBranchId, document_type: 'opening_stock' } as InventoryDocument)
+  const result = await inventoryAction('post', { id: documentId, branch_id: finalBranchId, document_type: 'opening_stock' } as InventoryDocument)
+
+  return result
+}
