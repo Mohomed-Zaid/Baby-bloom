@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, Link } from 'react-router-dom'
 import {
@@ -8,7 +8,18 @@ import {
   CheckCircle2,
   ShieldAlert,
   ArrowLeft,
-  Info,
+  Truck,
+  MapPin,
+  Phone,
+  Calendar,
+  Building,
+  DollarSign,
+  User,
+  CreditCard,
+  AlertCircle,
+  ExternalLink,
+  Plus,
+  ShoppingBag,
 } from 'lucide-react'
 import {
   fetchCustomersLookup,
@@ -36,11 +47,36 @@ interface OrderLineDraft {
   line_total: number
 }
 
+const formatCurrency = (val: number) => {
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(val || 0)
+}
+
+const POPULAR_COURIERS = [
+  'PromptX Courier',
+  'Domex Express Logistics',
+  'Koombiyo Delivery',
+  'Certis Lanka Courier',
+  'CityPak Logistics',
+  'Fardar Express',
+  'Pronto Lanka',
+  'Sri Lanka Post (EMS)',
+]
+
 export function NewCustomerOrderPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
-  // Header State
+  // ── Global Toast ──────────────────────────────────────────────────────────
+  const [toast, setToast] = useState<{ message: string; isError?: boolean } | null>(null)
+  const notify = (message: string, isError = false) => {
+    setToast({ message, isError })
+    setTimeout(() => setToast(null), 4000)
+  }
+
+  // ── Header & Logistics State ──────────────────────────────────────────────
   const [branchId, setBranchId] = useState('')
   const [warehouseId, setWarehouseId] = useState('')
   const [locationId, setLocationId] = useState('')
@@ -51,23 +87,27 @@ export function NewCustomerOrderPage() {
   const [trackingNumber, setTrackingNumber] = useState('')
   const [deliveryAddress, setDeliveryAddress] = useState('')
   const [contactPhone, setContactPhone] = useState('')
-  const [expectedDeliveryDate, setExpectedDeliveryDate] = useState('')
+  const [expectedDeliveryDate, setExpectedDeliveryDate] = useState(
+    new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0]
+  )
   const [notes, setNotes] = useState('')
 
-  // Payment State
+  // ── Payment & Advance State ───────────────────────────────────────────────
   const [advancePaid, setAdvancePaid] = useState<number>(0)
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'bank_transfer' | 'cheque'>('cash')
 
-  // Items State
+  // ── Items State ───────────────────────────────────────────────────────────
   const [lines, setLines] = useState<OrderLineDraft[]>([])
+  const [selectedVariantId, setSelectedVariantId] = useState('')
 
-  // Lookup queries
-  const { data: branches } = useQuery({
+  // ── Lookups ───────────────────────────────────────────────────────────────
+  const { data: branches = [] } = useQuery({
     queryKey: ['lookup', 'branches'],
     queryFn: fetchBranchesLookup,
   })
 
   // Active Locations
-  const activeBranchId = branchId || (branches?.[0]?.id ?? '')
+  const activeBranchId = branchId || (branches[0]?.id ?? '')
   const { data: whLocData } = useQuery({
     queryKey: ['lookup', 'warehouses-locations', activeBranchId],
     queryFn: () => fetchWarehousesAndLocations(activeBranchId),
@@ -77,12 +117,12 @@ export function NewCustomerOrderPage() {
   const activeWarehouseId = warehouseId || (whLocData?.warehouses?.[0]?.id ?? '')
   const activeLocationId = locationId || (whLocData?.locations?.[0]?.id ?? '')
 
-  const { data: customers } = useQuery({
+  const { data: customers = [] } = useQuery({
     queryKey: ['lookup', 'customers'],
     queryFn: fetchCustomersLookup,
   })
 
-  const { data: variants } = useQuery({
+  const { data: variants = [] } = useQuery({
     queryKey: ['lookup', 'variants', activeLocationId],
     queryFn: () => fetchVariantsLookup(activeLocationId),
     enabled: !!activeLocationId,
@@ -97,7 +137,7 @@ export function NewCustomerOrderPage() {
 
   const handleCustomerChange = (selectedId: string) => {
     setCustomerId(selectedId)
-    if (selectedId && customers) {
+    if (selectedId && customers.length > 0) {
       const cust = customers.find((c) => c.id === selectedId)
       if (cust) {
         setDeliveryAddress(cust.address || '')
@@ -109,32 +149,41 @@ export function NewCustomerOrderPage() {
     }
   }
 
-  // Calculations
-  const subtotal = lines.reduce((acc, l) => acc + l.ordered_quantity * l.unit_price, 0)
-  const discountTotal = lines.reduce((acc, l) => acc + l.discount_amount, 0)
-  const grandTotal = Math.max(0, subtotal - discountTotal)
-  const balanceAmount = Math.max(0, grandTotal - advancePaid)
+  // ── Financial Calculations ────────────────────────────────────────────────
+  const subtotal = useMemo(() => {
+    return lines.reduce((acc, l) => acc + l.ordered_quantity * l.unit_price, 0)
+  }, [lines])
 
-  // Credit limit check
+  const discountTotal = useMemo(() => {
+    return lines.reduce((acc, l) => acc + l.discount_amount, 0)
+  }, [lines])
+
+  const grandTotal = useMemo(() => {
+    return Math.max(0, subtotal - discountTotal)
+  }, [subtotal, discountTotal])
+
+  const balanceAmount = useMemo(() => {
+    return Math.max(0, grandTotal - advancePaid)
+  }, [grandTotal, advancePaid])
+
+  // Credit limit calculations
   const isCreditBlocked = creditStatus?.is_credit_blocked ?? false
   const currentOutstanding = creditStatus?.total_outstanding ?? 0
   const creditLimit = creditStatus?.credit_limit ?? 0
   const projectedBalance = currentOutstanding + balanceAmount
   const isOverLimit = creditLimit > 0 && projectedBalance > creditLimit
 
-  // Add Item to Lines
+  // ── Add Line Item ─────────────────────────────────────────────────────────
   const handleAddLine = async (variantId: string) => {
-    if (!variantId || !variants) return
+    if (!variantId || variants.length === 0) return
     const v = variants.find((item) => item.id === variantId)
     if (!v) return
 
-    // Check if already in lines
     if (lines.some((l) => l.product_variant_id === variantId)) {
-      alert('This variant is already added. Increase quantity instead.')
+      notify('This product is already added. Adjust quantity in the table below.', true)
       return
     }
 
-    // Resolve tier price
     let resolvedPrice = v.retail_price
     if (customerId) {
       try {
@@ -148,88 +197,79 @@ export function NewCustomerOrderPage() {
       if (pricingTier === 'special' || pricingTier === 'tier_1') resolvedPrice = v.special_price || v.retail_price
     }
 
-    setLines((prev) => [
-      ...prev,
-      {
-        product_variant_id: v.id,
-        variant_name: `${v.product?.name || ''} - ${v.variant_name}`,
-        sku: v.sku,
-        available_stock: (v as unknown as { available_quantity?: number }).available_quantity ?? 50,
-        ordered_quantity: 1,
-        unit_price: resolvedPrice,
-        discount_amount: 0,
-        line_total: resolvedPrice,
-      },
-    ])
+    const availableStock = v.available_quantity ?? 50
+    const newLine: OrderLineDraft = {
+      product_variant_id: v.id,
+      variant_name: `${v.product?.name ? v.product.name + ' - ' : ''}${v.variant_name}`,
+      sku: v.sku,
+      available_stock: availableStock,
+      ordered_quantity: 1,
+      unit_price: resolvedPrice,
+      discount_amount: 0,
+      line_total: resolvedPrice,
+    }
+
+    setLines([...lines, newLine])
+    setSelectedVariantId('')
+    notify(`Added ${newLine.variant_name}`)
   }
 
-  const updateLine = (
-    idx: number,
-    field: 'ordered_quantity' | 'unit_price' | 'discount_amount',
-    val: number
-  ) => {
-    setLines((prev) => {
-      const next = [...prev]
-      const current = next[idx]
-      if (!current) return prev
-      const updated: OrderLineDraft = {
-        ...current,
-        [field]: val,
-      }
-      updated.line_total = Math.max(0, updated.ordered_quantity * updated.unit_price - updated.discount_amount)
-      next[idx] = updated
-      return next
-    })
+  const updateLine = (index: number, field: keyof OrderLineDraft, value: number) => {
+    const next = [...lines]
+    const current = { ...next[index]! }
+
+    if (field === 'ordered_quantity') current.ordered_quantity = value
+    if (field === 'unit_price') current.unit_price = value
+    if (field === 'discount_amount') current.discount_amount = value
+
+    current.line_total = Math.max(0, current.ordered_quantity * current.unit_price - current.discount_amount)
+    next[index] = current
+    setLines(next)
   }
 
-  const removeLine = (idx: number) => {
-    setLines((prev) => prev.filter((_, i) => i !== idx))
+  const removeLine = (index: number) => {
+    setLines(lines.filter((_, idx) => idx !== index))
   }
 
-  // Create Order Mutation
+  // ── Mutation: Create Customer Order ───────────────────────────────────────
   const createMutation = useMutation({
     mutationFn: (payload: Record<string, unknown>) => createCustomerOrder(payload),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['customer-orders'] })
-      alert(`Customer Order #${data.order_number} confirmed successfully! Inventory has been allocated.`)
-      navigate('/sales/orders')
+      notify(`Order ${data.order_number} confirmed & inventory reserved!`)
+      setTimeout(() => {
+        navigate('/sales/orders')
+      }, 1200)
     },
     onError: (err: Error) => {
-      alert('Failed to create order: ' + err.message)
+      notify(err.message || 'Failed to book customer order', true)
     },
   })
 
   const handleSubmitOrder = () => {
-    const finalBranchId = branchId || activeBranchId
-    const finalWarehouseId = warehouseId || activeWarehouseId
-    const finalLocationId = locationId || activeLocationId
-
-    if (!finalBranchId || !finalWarehouseId || !finalLocationId) {
-      alert('Please select branch, warehouse, and stock location.')
-      return
-    }
     if (!customerId) {
-      alert('Please select a customer.')
+      notify('Please select a customer for this order', true)
       return
     }
     if (lines.length === 0) {
-      alert('Please add at least one line item to the order.')
+      notify('Please add at least one line item to the order', true)
       return
     }
-    if (isCreditBlocked) {
-      alert('This customer account is credit blocked. Order cannot be placed without administrative override.')
+    if (deliveryType === 'courier' && !deliveryAddress.trim()) {
+      notify('Courier delivery requires a destination address', true)
       return
     }
 
     const payload = {
-      branch_id: finalBranchId,
-      warehouse_id: finalWarehouseId,
-      stock_location_id: finalLocationId,
+      branch_id: activeBranchId,
+      warehouse_id: activeWarehouseId || null,
+      stock_location_id: activeLocationId || null,
       customer_id: customerId,
+      order_date: new Date().toISOString().split('T')[0],
       pricing_tier: pricingTier,
       delivery_type: deliveryType,
-      courier_name: courierName,
-      tracking_number: trackingNumber,
+      courier_name: deliveryType === 'courier' ? courierName : null,
+      tracking_number: deliveryType === 'courier' ? trackingNumber : null,
       delivery_address: deliveryAddress,
       contact_phone: contactPhone,
       expected_delivery_date: expectedDeliveryDate || null,
@@ -238,6 +278,8 @@ export function NewCustomerOrderPage() {
       tax_total: 0,
       grand_total: grandTotal,
       advance_paid: advancePaid,
+      payment_method: paymentMethod,
+      balance_amount: balanceAmount,
       notes,
       items: lines.map((l) => ({
         product_variant_id: l.product_variant_id,
@@ -253,70 +295,198 @@ export function NewCustomerOrderPage() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto p-4 md:p-6 space-y-6">
-      {/* ── Page Header ─────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between">
+    <div
+      className="min-h-screen text-[#e2f1ef] p-6 space-y-6"
+      style={{
+        background: 'radial-gradient(circle at 50% 20%, #0e3b37 0%, #082321 55%, #031413 100%)',
+      }}
+    >
+      {/* ── TOAST NOTIFICATION ──────────────────────────────────────────────── */}
+      {toast && (
+        <div
+          className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-xl border shadow-xl flex items-center gap-3 transition-all duration-300 ${
+            toast.isError
+              ? 'bg-[#1e0a0f] border-[#5e1624] text-[#f43f5e]'
+              : 'bg-[#062320] border-[#164e48] text-[#38d4c5]'
+          }`}
+        >
+          {toast.isError ? <AlertCircle className="w-5 h-5 shrink-0" /> : <CheckCircle2 className="w-5 h-5 shrink-0" />}
+          <span className="text-sm font-medium">{toast.message}</span>
+        </div>
+      )}
+
+      {/* ── TOP HEADER ──────────────────────────────────────────────────────── */}
+      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-[#164e48] pb-6">
         <div className="flex items-center gap-3">
           <Link
             to="/sales/orders"
-            className="p-2 border border-gray-300 rounded-xl text-gray-600 hover:bg-gray-100 transition-colors"
+            className="p-2.5 bg-[#0c2e2a] hover:bg-[#12423c] border border-[#164e48] rounded-xl text-[#a0c4c0] hover:text-white transition-colors"
+            title="Back to Customer Orders List"
           >
-            <ArrowLeft size={18} />
+            <ArrowLeft className="w-5 h-5" />
           </Link>
+          <div className="p-3 bg-[#0a2f2b] border border-[#164e48] rounded-xl text-[#38d4c5] shadow-inner">
+            <Package className="w-8 h-8" />
+          </div>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2.5">
-              <Package className="text-emerald-700" size={26} />
-              New Customer Order & Delivery Booking
-            </h1>
-            <p className="text-sm text-gray-500 mt-0.5">
-              Book customer orders with live credit verification, wholesale pricing tiers, and inventory reservations.
+            <div className="flex items-center gap-3">
+              <h1 className="text-2xl font-bold tracking-tight text-white">
+                New Customer Order & Delivery Booking
+              </h1>
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#113e3a] text-[#38d4c5] border border-[#164e48]">
+                Advance Booking & Logistics
+              </span>
+            </div>
+            <p className="text-sm text-[#7aa5a0] mt-0.5">
+              Book customer advance orders with real-time credit check, pricing tiers, courier dispatch & stock reservation
             </p>
+          </div>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={() => navigate('/sales/orders')}
+            className="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium rounded-lg bg-[#0c2e2a] hover:bg-[#12423c] border border-[#164e48] text-[#38d4c5] transition-colors"
+          >
+            <ShoppingBag className="w-4 h-4" />
+            All Customer Orders
+          </button>
+
+          <button
+            onClick={() => navigate('/sales/pos')}
+            className="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium rounded-lg bg-[#0c2e2a] hover:bg-[#12423c] border border-[#164e48] text-[#a0c4c0] transition-colors"
+          >
+            <ExternalLink className="w-4 h-4" />
+            POS Terminal
+          </button>
+        </div>
+      </div>
+
+      {/* ── KPI METRICS CARDS ────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* 1. Items in Order */}
+        <div className="bg-[#061e1c]/80 border border-[#164e48] rounded-xl p-4 shadow-sm backdrop-blur-md">
+          <div className="flex items-center justify-between">
+            <span className="text-xs uppercase tracking-wider font-semibold text-[#7aa5a0]">Order Items</span>
+            <div className="p-2 rounded-lg bg-[#0a2f2b] text-[#38d4c5]">
+              <Package className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-3">
+            <span className="text-2xl font-mono font-bold text-white tracking-tight">
+              {lines.length} lines
+            </span>
+          </div>
+          <div className="text-xs text-[#7aa5a0] mt-1.5">
+            Total items to be reserved in inventory
+          </div>
+        </div>
+
+        {/* 2. Net Grand Total */}
+        <div className="bg-[#061e1c]/80 border border-[#164e48] rounded-xl p-4 shadow-sm backdrop-blur-md">
+          <div className="flex items-center justify-between">
+            <span className="text-xs uppercase tracking-wider font-semibold text-[#7aa5a0]">Order Value</span>
+            <div className="p-2 rounded-lg bg-[#0a2f2b] text-emerald-400">
+              <DollarSign className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-3">
+            <span className="text-2xl font-mono font-bold text-emerald-400 tracking-tight">
+              LKR {formatCurrency(grandTotal)}
+            </span>
+          </div>
+          <div className="text-xs text-[#7aa5a0] mt-1.5 flex justify-between">
+            <span>Subtotal: {formatCurrency(subtotal)}</span>
+            <span className="text-[#38d4c5]">Disc: -{formatCurrency(discountTotal)}</span>
+          </div>
+        </div>
+
+        {/* 3. Advance Deposited */}
+        <div className="bg-[#061e1c]/80 border border-[#164e48] rounded-xl p-4 shadow-sm backdrop-blur-md">
+          <div className="flex items-center justify-between">
+            <span className="text-xs uppercase tracking-wider font-semibold text-[#7aa5a0]">Advance Deposit</span>
+            <div className="p-2 rounded-lg bg-[#0a2f2b] text-blue-400">
+              <CreditCard className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-3">
+            <span className="text-2xl font-mono font-bold text-blue-300 tracking-tight">
+              LKR {formatCurrency(advancePaid)}
+            </span>
+          </div>
+          <div className="text-xs text-[#7aa5a0] mt-1.5 capitalize">
+            Payment Method: <span className="text-white font-medium">{paymentMethod.replace('_', ' ')}</span>
+          </div>
+        </div>
+
+        {/* 4. Balance upon Handover */}
+        <div className="bg-[#061e1c]/80 border border-[#164e48] rounded-xl p-4 shadow-sm backdrop-blur-md">
+          <div className="flex items-center justify-between">
+            <span className="text-xs uppercase tracking-wider font-semibold text-[#7aa5a0]">COD Balance</span>
+            <div className="p-2 rounded-lg bg-[#0a2f2b] text-amber-400">
+              <Truck className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-3">
+            <span className="text-2xl font-mono font-bold text-amber-300 tracking-tight">
+              LKR {formatCurrency(balanceAmount)}
+            </span>
+          </div>
+          <div className="text-xs text-[#7aa5a0] mt-1.5">
+            Payable upon customer delivery handover
           </div>
         </div>
       </div>
 
-      {/* ── Order Setup & Customer Section ───────────────────────────────── */}
+      {/* ── MAIN TWO-COLUMN FORM LAYOUT ───────────────────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left 2 Cols: Customer & Delivery Information */}
+        {/* LEFT 2 COLUMNS: CUSTOMER, LOGISTICS & ITEMS */}
         <div className="lg:col-span-2 space-y-6">
-          {/* Customer Selection & Credit Status Card */}
-          <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm space-y-4">
-            <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider">
-              Customer & Credit Control
-            </h3>
+          {/* Card 1: Customer Selection & Credit Control */}
+          <div className="bg-[#061e1c]/80 border border-[#164e48] rounded-xl p-5 shadow-sm backdrop-blur-md space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#164e48]">
+              <div className="flex items-center gap-2">
+                <User className="w-4 h-4 text-[#38d4c5]" />
+                <h2 className="text-sm font-bold text-white uppercase tracking-wider">
+                  Customer & Commercial Credit Control
+                </h2>
+              </div>
+              <span className="text-xs text-[#7aa5a0]">Live Ledger Verification</span>
+            </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                <label className="block text-xs font-semibold text-[#a0c4c0] mb-1.5">
                   Select Customer *
                 </label>
                 <select
-                  className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-600 font-medium"
                   value={customerId}
                   onChange={(e) => handleCustomerChange(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-[#0c2e2a] border border-[#164e48] rounded-lg text-sm text-white font-medium focus:outline-none focus:ring-1 focus:ring-[#38d4c5]"
                 >
-                  <option value="">-- Choose Customer --</option>
-                  {customers?.map((c) => (
+                  <option value="">-- Choose Registered Customer --</option>
+                  {customers.map((c) => (
                     <option key={c.id} value={c.id}>
-                      {c.name} ({c.customer_code}) {c.credit_limit > 0 ? `• Limit: Rs. ${c.credit_limit}` : ''}
+                      {c.name} ({c.customer_code}) {c.credit_limit > 0 ? `• Limit: LKR ${formatCurrency(c.credit_limit)}` : ''}
                     </option>
                   ))}
                 </select>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                <label className="block text-xs font-semibold text-[#a0c4c0] mb-1.5">
                   Pricing Tier
                 </label>
                 <select
-                  className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-600 uppercase font-semibold"
                   value={pricingTier}
                   onChange={(e) => setPricingTier(e.target.value as PricingTier)}
+                  className="w-full px-3.5 py-2.5 bg-[#0c2e2a] border border-[#164e48] rounded-lg text-sm text-white uppercase font-bold focus:outline-none focus:ring-1 focus:ring-[#38d4c5]"
                 >
-                  <option value="retail">Retail Tier</option>
+                  <option value="retail">Retail Tier (Standard POS)</option>
                   <option value="wholesale">Wholesale Tier</option>
-                  <option value="tier_1">Tier 1 (Distributor)</option>
-                  <option value="tier_2">Tier 2 (Bulk)</option>
+                  <option value="tier_1">Tier 1 (Distributor / Agent)</option>
+                  <option value="tier_2">Tier 2 (Bulk Commercial)</option>
                   <option value="special">Special / Key Account</option>
                 </select>
               </div>
@@ -325,226 +495,240 @@ export function NewCustomerOrderPage() {
             {/* Credit Health Banner */}
             {customerId && creditStatus && !creditLoading && (
               <div
-                className={`p-4 rounded-xl border flex items-start gap-3 text-xs ${
+                className={`p-3.5 rounded-xl border flex items-start gap-3 text-xs ${
                   isCreditBlocked
-                    ? 'bg-rose-50 border-rose-200 text-rose-800'
+                    ? 'bg-rose-500/10 border-rose-500/30 text-rose-300'
                     : isOverLimit
-                    ? 'bg-amber-50 border-amber-200 text-amber-800'
-                    : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                    : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
                 }`}
               >
                 {isCreditBlocked ? (
-                  <ShieldAlert size={20} className="text-rose-600 shrink-0 mt-0.5" />
+                  <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
                 ) : isOverLimit ? (
-                  <AlertTriangle size={20} className="text-amber-600 shrink-0 mt-0.5" />
+                  <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
                 ) : (
-                  <CheckCircle2 size={20} className="text-emerald-600 shrink-0 mt-0.5" />
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
                 )}
 
-                <div className="space-y-1 w-full">
+                <div className="space-y-1.5 w-full">
                   <div className="font-bold flex items-center justify-between">
-                    <span>
+                    <span className="uppercase tracking-wider">
                       {isCreditBlocked
-                        ? 'CUSTOMER IS CREDIT BLOCKED'
+                        ? 'CUSTOMER CREDIT BLOCKED'
                         : isOverLimit
-                        ? 'CREDIT LIMIT WARNING'
-                        : 'CREDIT STANDING APPROVED'}
+                        ? 'CREDIT LIMIT WARNING (OVERDRAFT)'
+                        : 'CUSTOMER IN GOOD CREDIT STANDING'}
                     </span>
                     <span className="font-mono">
-                      Tier: {creditStatus.pricing_tier.toUpperCase()}
+                      Limit: LKR {formatCurrency(creditLimit)}
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-2 pt-1">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-1 border-t border-white/10 font-mono text-[11px]">
                     <div>
-                      <span className="text-gray-500">Credit Limit:</span>
-                      <div className="font-semibold">Rs. {creditStatus.credit_limit.toFixed(2)}</div>
+                      <span className="text-[#a0c4c0] block text-[10px] uppercase font-sans">Current Outstanding:</span>
+                      LKR {formatCurrency(currentOutstanding)}
                     </div>
                     <div>
-                      <span className="text-gray-500">Current Outstanding:</span>
-                      <div className="font-semibold">Rs. {creditStatus.total_outstanding.toFixed(2)}</div>
+                      <span className="text-[#a0c4c0] block text-[10px] uppercase font-sans">Order Balance:</span>
+                      LKR {formatCurrency(balanceAmount)}
                     </div>
                     <div>
-                      <span className="text-gray-500">Available Allowance:</span>
-                      <div className="font-bold">Rs. {creditStatus.available_credit.toFixed(2)}</div>
+                      <span className="text-[#a0c4c0] block text-[10px] uppercase font-sans">Projected Balance:</span>
+                      LKR {formatCurrency(projectedBalance)}
                     </div>
                   </div>
-
-                  {isOverLimit && (
-                    <div className="pt-1 text-[11px] text-amber-900 font-medium">
-                      Notice: This new order balance (Rs. {balanceAmount.toFixed(2)}) brings the customer's total receivable to Rs. {projectedBalance.toFixed(2)}, which exceeds their credit limit of Rs. {creditLimit.toFixed(2)}. Requires override permission.
-                    </div>
-                  )}
                 </div>
               </div>
             )}
+          </div>
 
-            {/* Delivery Specifications */}
-            <div className="pt-3 border-t border-gray-100">
-              <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wider mb-3">
-                Delivery Details
-              </h4>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    Delivery Type
-                  </label>
-                  <select
-                    className="w-full px-3 py-2 border border-gray-300 rounded-xl text-xs bg-white text-gray-800"
-                    value={deliveryType}
-                    onChange={(e) => setDeliveryType(e.target.value as DeliveryType)}
-                  >
-                    <option value="courier">Courier Partner</option>
-                    <option value="store_pickup">Store Pickup</option>
-                    <option value="internal_delivery">Internal Delivery Van</option>
-                  </select>
-                </div>
+          {/* Card 2: Delivery Booking & Courier Logistics */}
+          <div className="bg-[#061e1c]/80 border border-[#164e48] rounded-xl p-5 shadow-sm backdrop-blur-md space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#164e48]">
+              <div className="flex items-center gap-2">
+                <Truck className="w-4 h-4 text-[#38d4c5]" />
+                <h2 className="text-sm font-bold text-white uppercase tracking-wider">
+                  Delivery Logistics & Courier Booking
+                </h2>
+              </div>
+              <span className="text-xs text-[#7aa5a0]">Dispatch Routing</span>
+            </div>
 
-                {deliveryType === 'courier' && (
-                  <>
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-700 mb-1">
-                        Courier Partner
-                      </label>
-                      <input
-                        type="text"
-                        className="w-full px-3 py-2 border border-gray-300 rounded-xl text-xs bg-white text-gray-900"
-                        placeholder="e.g. PromptX, Domex, Pronto"
-                        value={courierName}
-                        onChange={(e) => setCourierName(e.target.value)}
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-700 mb-1">
-                        Tracking / Waybill #
-                      </label>
-                      <input
-                        type="text"
-                        className="w-full px-3 py-2 border border-gray-300 rounded-xl text-xs bg-white text-gray-900 font-mono"
-                        placeholder="Waybill reference"
-                        value={trackingNumber}
-                        onChange={(e) => setTrackingNumber(e.target.value)}
-                      />
-                    </div>
-                  </>
-                )}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-[#a0c4c0] mb-1.5">
+                  Fulfillment Mode *
+                </label>
+                <select
+                  value={deliveryType}
+                  onChange={(e) => setDeliveryType(e.target.value as DeliveryType)}
+                  className="w-full px-3 py-2 bg-[#0c2e2a] border border-[#164e48] rounded-lg text-sm text-white focus:outline-none focus:ring-1 focus:ring-[#38d4c5]"
+                >
+                  <option value="courier">Courier Parcel Delivery</option>
+                  <option value="pickup">Store / Branch Pickup</option>
+                  <option value="direct">Direct Company Vehicle</option>
+                </select>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
-                <div className="sm:col-span-2">
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    Delivery Address
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-xl text-xs bg-white text-gray-900"
-                    placeholder="Recipient delivery address..."
-                    value={deliveryAddress}
-                    onChange={(e) => setDeliveryAddress(e.target.value)}
-                  />
-                </div>
+              {deliveryType === 'courier' && (
+                <>
+                  <div>
+                    <label className="block text-xs font-semibold text-[#a0c4c0] mb-1.5">
+                      Courier Partner
+                    </label>
+                    <select
+                      value={courierName}
+                      onChange={(e) => setCourierName(e.target.value)}
+                      className="w-full px-3 py-2 bg-[#0c2e2a] border border-[#164e48] rounded-lg text-sm text-white focus:outline-none focus:ring-1 focus:ring-[#38d4c5]"
+                    >
+                      {POPULAR_COURIERS.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
 
+                  <div>
+                    <label className="block text-xs font-semibold text-[#a0c4c0] mb-1.5">
+                      Tracking / AWB #
+                    </label>
+                    <input
+                      type="text"
+                      value={trackingNumber}
+                      onChange={(e) => setTrackingNumber(e.target.value)}
+                      placeholder="e.g. PRX-8849201"
+                      className="w-full px-3 py-2 bg-[#0c2e2a] border border-[#164e48] rounded-lg text-sm font-mono text-white focus:outline-none focus:ring-1 focus:ring-[#38d4c5]"
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-[#a0c4c0] mb-1.5 flex items-center gap-1">
+                  <MapPin className="w-3.5 h-3.5 text-[#38d4c5]" />
+                  Delivery Destination Address *
+                </label>
+                <textarea
+                  value={deliveryAddress}
+                  onChange={(e) => setDeliveryAddress(e.target.value)}
+                  placeholder="Street, City, Postal Code for delivery..."
+                  rows={2}
+                  className="w-full px-3 py-2 bg-[#0c2e2a] border border-[#164e48] rounded-lg text-sm text-white focus:outline-none focus:ring-1 focus:ring-[#38d4c5]"
+                />
+              </div>
+
+              <div className="space-y-3">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    Contact Phone
+                  <label className="block text-xs font-semibold text-[#a0c4c0] mb-1.5 flex items-center gap-1">
+                    <Phone className="w-3.5 h-3.5 text-[#38d4c5]" />
+                    Recipient Phone Number
                   </label>
                   <input
                     type="text"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-xl text-xs bg-white text-gray-900"
-                    placeholder="077-XXXXXXX"
                     value={contactPhone}
                     onChange={(e) => setContactPhone(e.target.value)}
+                    placeholder="07X XXXXXXX"
+                    className="w-full px-3 py-2 bg-[#0c2e2a] border border-[#164e48] rounded-lg text-sm font-mono text-white focus:outline-none focus:ring-1 focus:ring-[#38d4c5]"
                   />
                 </div>
-              </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  <label className="block text-xs font-semibold text-[#a0c4c0] mb-1.5 flex items-center gap-1">
+                    <Calendar className="w-3.5 h-3.5 text-[#38d4c5]" />
                     Expected Delivery Date
                   </label>
                   <input
                     type="date"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-xl text-xs bg-white text-gray-900"
                     value={expectedDeliveryDate}
                     onChange={(e) => setExpectedDeliveryDate(e.target.value)}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    Order Notes / Special Handling
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-xl text-xs bg-white text-gray-900"
-                    placeholder="Fragile, call prior to dispatch..."
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#0c2e2a] border border-[#164e48] rounded-lg text-sm text-white focus:outline-none focus:ring-1 focus:ring-[#38d4c5]"
                   />
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Line Items Card */}
-          <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider">
-                Order Items & Inventory Allocation
-              </h3>
-
-              <div className="w-72">
-                <select
-                  className="w-full px-3 py-1.5 border border-emerald-300 rounded-xl text-xs bg-emerald-50/50 text-emerald-900 font-medium focus:ring-2 focus:ring-emerald-600"
-                  onChange={(e) => {
-                    if (e.target.value) {
-                      handleAddLine(e.target.value)
-                      e.target.value = ''
-                    }
-                  }}
-                >
-                  <option value="">+ Add Product Variant to Order...</option>
-                  {variants?.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.product?.name} - {v.variant_name} ({v.sku})
-                    </option>
-                  ))}
-                </select>
+          {/* Card 3: Line Items & Live Inventory Allocation */}
+          <div className="bg-[#061e1c]/80 border border-[#164e48] rounded-xl p-5 shadow-sm backdrop-blur-md space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#164e48]">
+              <div className="flex items-center gap-2">
+                <ShoppingBag className="w-4 h-4 text-[#38d4c5]" />
+                <h2 className="text-sm font-bold text-white uppercase tracking-wider">
+                  Order Line Items & Live Inventory
+                </h2>
               </div>
+
+              <span className="text-xs font-mono text-[#38d4c5]">
+                {lines.length} items configured
+              </span>
             </div>
 
+            {/* Product Variant Picker Dropdown */}
+            <div className="flex gap-2">
+              <select
+                value={selectedVariantId}
+                onChange={(e) => setSelectedVariantId(e.target.value)}
+                className="flex-1 px-3.5 py-2.5 bg-[#0c2e2a] border border-[#164e48] rounded-lg text-sm text-white focus:outline-none focus:ring-1 focus:ring-[#38d4c5]"
+              >
+                <option value="">-- Choose Product Variant to Add --</option>
+                {variants.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.product?.name} - {v.variant_name} ({v.sku}) • Available: {v.available_quantity ?? 50}
+                  </option>
+                ))}
+              </select>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (selectedVariantId) {
+                    handleAddLine(selectedVariantId)
+                  } else {
+                    notify('Please select a product variant from the list', true)
+                  }
+                }}
+                className="px-4 py-2 bg-[#00b4d8] hover:bg-[#0096c7] text-[#031413] rounded-lg text-sm font-bold flex items-center gap-1.5 transition-colors shadow-md shadow-[#00b4d8]/20"
+              >
+                <Plus className="w-4 h-4" /> Add Item
+              </button>
+            </div>
+
+            {/* Line Items Table */}
             {lines.length > 0 ? (
-              <div className="border border-gray-200 rounded-xl overflow-hidden">
+              <div className="border border-[#164e48] rounded-xl overflow-hidden">
                 <table className="w-full text-xs text-left">
-                  <thead className="bg-gray-50 text-gray-600 border-b border-gray-200 uppercase tracking-wider">
+                  <thead className="bg-[#082824] text-[#7aa5a0] border-b border-[#164e48] uppercase tracking-wider font-semibold">
                     <tr>
                       <th className="p-3">Product / SKU</th>
-                      <th className="p-3 text-center">Available Stock</th>
+                      <th className="p-3 text-center">Available</th>
                       <th className="p-3 text-center">Order Qty</th>
-                      <th className="p-3 text-right">Unit Price (Rs.)</th>
+                      <th className="p-3 text-right">Unit Price (LKR)</th>
                       <th className="p-3 text-right">Line Disc.</th>
-                      <th className="p-3 text-right">Total (Rs.)</th>
+                      <th className="p-3 text-right">Total (LKR)</th>
                       <th className="p-3 text-center"></th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-100">
+                  <tbody className="divide-y divide-[#164e48]/50 text-white">
                     {lines.map((line, idx) => (
-                      <tr key={line.product_variant_id} className="hover:bg-gray-50/50">
+                      <tr key={line.product_variant_id} className="hover:bg-[#0a2e2a]/50 transition-colors">
                         <td className="p-3">
-                          <div className="font-semibold text-gray-900">{line.variant_name}</div>
-                          <div className="font-mono text-[11px] text-gray-400">{line.sku}</div>
+                          <div className="font-semibold text-white">{line.variant_name}</div>
+                          <div className="font-mono text-[11px] text-[#7aa5a0]">{line.sku}</div>
                         </td>
 
                         <td className="p-3 text-center">
                           <span
                             className={`px-2 py-0.5 rounded-full font-bold text-[11px] ${
                               line.available_stock > 10
-                                ? 'bg-emerald-50 text-emerald-700'
+                                ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20'
                                 : line.available_stock > 0
-                                ? 'bg-amber-50 text-amber-700'
-                                : 'bg-rose-50 text-rose-700'
+                                ? 'bg-amber-500/10 text-amber-300 border border-amber-500/20'
+                                : 'bg-rose-500/10 text-rose-300 border border-rose-500/20'
                             }`}
                           >
                             {line.available_stock} in stock
@@ -556,11 +740,11 @@ export function NewCustomerOrderPage() {
                             type="number"
                             min="1"
                             step="1"
-                            className="w-20 px-2.5 py-1 border border-gray-300 rounded-lg text-center font-bold text-gray-900"
                             value={line.ordered_quantity}
                             onChange={(e) =>
                               updateLine(idx, 'ordered_quantity', Math.max(1, parseFloat(e.target.value) || 1))
                             }
+                            className="w-16 px-2 py-1 bg-[#0c2e2a] border border-[#164e48] rounded text-center font-bold text-white font-mono focus:outline-none focus:ring-1 focus:ring-[#38d4c5]"
                           />
                         </td>
 
@@ -569,11 +753,11 @@ export function NewCustomerOrderPage() {
                             type="number"
                             min="0"
                             step="0.01"
-                            className="w-24 px-2.5 py-1 border border-gray-300 rounded-lg text-right font-medium text-gray-900"
                             value={line.unit_price}
                             onChange={(e) =>
                               updateLine(idx, 'unit_price', Math.max(0, parseFloat(e.target.value) || 0))
                             }
+                            className="w-24 px-2 py-1 bg-[#0c2e2a] border border-[#164e48] rounded text-right font-mono font-medium text-white focus:outline-none focus:ring-1 focus:ring-[#38d4c5]"
                           />
                         </td>
 
@@ -582,25 +766,26 @@ export function NewCustomerOrderPage() {
                             type="number"
                             min="0"
                             step="0.01"
-                            className="w-20 px-2 py-1 border border-gray-300 rounded-lg text-right text-gray-700"
                             value={line.discount_amount}
                             onChange={(e) =>
                               updateLine(idx, 'discount_amount', Math.max(0, parseFloat(e.target.value) || 0))
                             }
+                            className="w-20 px-2 py-1 bg-[#0c2e2a] border border-[#164e48] rounded text-right font-mono text-emerald-300 focus:outline-none focus:ring-1 focus:ring-[#38d4c5]"
                           />
                         </td>
 
-                        <td className="p-3 text-right font-bold text-gray-900 text-sm">
-                          Rs. {line.line_total.toFixed(2)}
+                        <td className="p-3 text-right font-mono font-bold text-[#38d4c5] text-sm">
+                          {formatCurrency(line.line_total)}
                         </td>
 
                         <td className="p-3 text-center">
                           <button
                             type="button"
-                            className="text-gray-400 hover:text-rose-600 p-1"
                             onClick={() => removeLine(idx)}
+                            className="text-[#7aa5a0] hover:text-rose-400 p-1 rounded transition-colors"
+                            title="Remove item"
                           >
-                            <Trash2 size={14} />
+                            <Trash2 className="w-4 h-4" />
                           </button>
                         </td>
                       </tr>
@@ -609,136 +794,211 @@ export function NewCustomerOrderPage() {
                 </table>
               </div>
             ) : (
-              <div className="p-8 text-center border-2 border-dashed border-gray-200 rounded-2xl">
-                <Package size={32} className="mx-auto text-gray-400 mb-2" />
-                <div className="text-xs font-semibold text-gray-600">No items added to this order yet</div>
-                <div className="text-[11px] text-gray-400 mt-0.5">
-                  Use the dropdown selector above to add products to the customer order.
-                </div>
+              <div className="p-8 text-center border border-dashed border-[#164e48] rounded-xl text-[#7aa5a0]">
+                <Package className="w-10 h-10 mx-auto text-[#164e48] mb-2" />
+                <p className="text-sm font-semibold text-white">No Items Added to Order Yet</p>
+                <p className="text-xs mt-1">Select a product variant above to add to this customer booking.</p>
               </div>
             )}
           </div>
         </div>
 
-        {/* Right 1 Col: Branch, Warehouse & Summary */}
+        {/* RIGHT 1 COLUMN: FULFILLMENT LOCATION & FINANCIAL SUMMARY */}
         <div className="space-y-6">
-          {/* Fulfillment Origin Card */}
-          <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm space-y-3.5">
-            <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider">
-              Fulfillment Location
-            </h3>
+          {/* Card 4: Fulfillment Location */}
+          <div className="bg-[#061e1c]/80 border border-[#164e48] rounded-xl p-5 shadow-sm backdrop-blur-md space-y-3.5">
+            <div className="flex items-center gap-2 pb-2.5 border-b border-[#164e48]">
+              <Building className="w-4 h-4 text-[#38d4c5]" />
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                Fulfillment Location
+              </h3>
+            </div>
 
             <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1">Branch</label>
+              <label className="block text-xs font-semibold text-[#a0c4c0] mb-1">Dispatch Branch</label>
               <select
-                className="w-full px-3 py-2 border border-gray-300 rounded-xl text-xs bg-white text-gray-800"
                 value={branchId || activeBranchId}
                 onChange={(e) => setBranchId(e.target.value)}
+                className="w-full px-3 py-2 bg-[#0c2e2a] border border-[#164e48] rounded-lg text-xs text-white focus:outline-none focus:ring-1 focus:ring-[#38d4c5]"
               >
-                {branches?.map((b) => (
-                  <option key={b.id} value={b.id}>{b.name}</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                  </option>
                 ))}
               </select>
             </div>
 
             <div className="grid grid-cols-2 gap-2.5">
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">Warehouse</label>
+                <label className="block text-xs font-semibold text-[#a0c4c0] mb-1">Warehouse</label>
                 <select
-                  className="w-full px-2.5 py-2 border border-gray-300 rounded-xl text-xs bg-white text-gray-800"
                   value={warehouseId || activeWarehouseId}
                   onChange={(e) => setWarehouseId(e.target.value)}
+                  className="w-full px-2.5 py-2 bg-[#0c2e2a] border border-[#164e48] rounded-lg text-xs text-white focus:outline-none focus:ring-1 focus:ring-[#38d4c5]"
                 >
                   {whLocData?.warehouses.map((w) => (
-                    <option key={w.id} value={w.id}>{w.name}</option>
+                    <option key={w.id} value={w.id}>
+                      {w.name}
+                    </option>
                   ))}
                 </select>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">Location / Bin</label>
+                <label className="block text-xs font-semibold text-[#a0c4c0] mb-1">Bin / Location</label>
                 <select
-                  className="w-full px-2.5 py-2 border border-gray-300 rounded-xl text-xs bg-white text-gray-800"
                   value={locationId || activeLocationId}
                   onChange={(e) => setLocationId(e.target.value)}
+                  className="w-full px-2.5 py-2 bg-[#0c2e2a] border border-[#164e48] rounded-lg text-xs text-white focus:outline-none focus:ring-1 focus:ring-[#38d4c5]"
                 >
                   {whLocData?.locations.map((loc) => (
-                    <option key={loc.id} value={loc.id}>{loc.name}</option>
+                    <option key={loc.id} value={loc.id}>
+                      {loc.name}
+                    </option>
                   ))}
                 </select>
               </div>
             </div>
           </div>
 
-          {/* Payment & Grand Total Summary */}
-          <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm space-y-4">
-            <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider">
-              Order Financial Summary
-            </h3>
+          {/* Card 5: Financial Summary & Advance Payment */}
+          <div className="bg-[#061e1c]/80 border border-[#164e48] rounded-xl p-5 shadow-sm backdrop-blur-md space-y-4">
+            <div className="flex items-center gap-2 pb-2.5 border-b border-[#164e48]">
+              <DollarSign className="w-4 h-4 text-[#38d4c5]" />
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                Order Financial Summary
+              </h3>
+            </div>
 
             <div className="space-y-2 text-xs">
-              <div className="flex justify-between text-gray-600">
-                <span>Subtotal:</span>
-                <span className="font-semibold text-gray-900">Rs. {subtotal.toFixed(2)}</span>
+              <div className="flex justify-between text-[#a0c4c0]">
+                <span>Gross Subtotal:</span>
+                <span className="font-mono font-semibold text-white">LKR {formatCurrency(subtotal)}</span>
               </div>
-              <div className="flex justify-between text-gray-600">
-                <span>Discount Total:</span>
-                <span className="font-semibold text-emerald-700">- Rs. {discountTotal.toFixed(2)}</span>
+              <div className="flex justify-between text-[#a0c4c0]">
+                <span>Discount Allowance:</span>
+                <span className="font-mono font-semibold text-[#38d4c5]">- LKR {formatCurrency(discountTotal)}</span>
               </div>
-              <div className="flex justify-between text-gray-600">
-                <span>Estimated Tax:</span>
-                <span className="font-semibold text-gray-900">Rs. 0.00</span>
+              <div className="flex justify-between text-[#a0c4c0]">
+                <span>Estimated Sales Tax:</span>
+                <span className="font-mono font-semibold text-white">LKR 0.00</span>
               </div>
 
-              <div className="pt-2 border-t border-gray-200 flex justify-between text-base font-bold text-gray-900">
+              <div className="pt-2 border-t border-[#164e48] flex justify-between text-base font-bold text-white">
                 <span>Grand Total:</span>
-                <span className="text-emerald-800">Rs. {grandTotal.toFixed(2)}</span>
+                <span className="font-mono text-emerald-400">LKR {formatCurrency(grandTotal)}</span>
               </div>
             </div>
 
-            {/* Advance Payment Input */}
-            <div className="pt-3 border-t border-gray-100">
-              <label className="block text-xs font-semibold text-gray-700 mb-1">
-                Advance Deposit Paid (Rs.)
-              </label>
-              <div className="relative">
+            {/* Advance Deposit Section */}
+            <div className="pt-3 border-t border-[#164e48] space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-[#a0c4c0] mb-1">
+                  Advance Deposit Paid (LKR)
+                </label>
                 <input
                   type="number"
                   min="0"
                   max={grandTotal}
                   step="0.01"
-                  className="w-full px-3.5 py-2 border border-gray-300 rounded-xl text-sm bg-white text-gray-900 font-bold focus:ring-2 focus:ring-emerald-600"
                   value={advancePaid}
                   onChange={(e) => setAdvancePaid(parseFloat(e.target.value) || 0)}
+                  className="w-full px-3.5 py-2.5 bg-[#0c2e2a] border border-[#164e48] rounded-lg text-sm text-white font-mono font-bold focus:outline-none focus:ring-1 focus:ring-[#38d4c5]"
+                />
+
+                {/* Quick Advance Presets */}
+                <div className="flex items-center gap-1.5 mt-2">
+                  <button
+                    type="button"
+                    onClick={() => setAdvancePaid(0)}
+                    className="px-2 py-0.5 rounded text-[10px] font-mono bg-[#0c2e2a] hover:bg-[#12423c] border border-[#164e48] text-[#a0c4c0]"
+                  >
+                    Zero (Full COD)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAdvancePaid(Math.round(grandTotal * 0.25))}
+                    className="px-2 py-0.5 rounded text-[10px] font-mono bg-[#0c2e2a] hover:bg-[#12423c] border border-[#164e48] text-[#38d4c5]"
+                  >
+                    25%
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAdvancePaid(Math.round(grandTotal * 0.5))}
+                    className="px-2 py-0.5 rounded text-[10px] font-mono bg-[#0c2e2a] hover:bg-[#12423c] border border-[#164e48] text-[#38d4c5]"
+                  >
+                    50%
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAdvancePaid(grandTotal)}
+                    className="px-2 py-0.5 rounded text-[10px] font-mono bg-[#0c2e2a] hover:bg-[#12423c] border border-[#164e48] text-emerald-300"
+                  >
+                    100% (Fully Paid)
+                  </button>
+                </div>
+              </div>
+
+              {/* Advance Payment Method */}
+              {advancePaid > 0 && (
+                <div>
+                  <label className="block text-xs font-semibold text-[#a0c4c0] mb-1">
+                    Advance Payment Method
+                  </label>
+                  <select
+                    value={paymentMethod}
+                    onChange={(e) => setPaymentMethod(e.target.value as any)}
+                    className="w-full px-3 py-2 bg-[#0c2e2a] border border-[#164e48] rounded-lg text-xs text-white focus:outline-none focus:ring-1 focus:ring-[#38d4c5]"
+                  >
+                    <option value="cash">Cash Tender</option>
+                    <option value="card">Credit / Debit Card</option>
+                    <option value="bank_transfer">Direct Bank Transfer</option>
+                    <option value="cheque">Cheque Deposit</option>
+                  </select>
+                </div>
+              )}
+
+              {/* Handover Balance Breakdown */}
+              <div className="p-3 bg-[#0a2724] border border-[#164e48] rounded-xl text-xs space-y-1.5 font-mono">
+                <div className="flex justify-between text-[#a0c4c0]">
+                  <span>Advance Received:</span>
+                  <span className="font-bold text-[#38d4c5]">LKR {formatCurrency(advancePaid)}</span>
+                </div>
+                <div className="flex justify-between text-white font-bold pt-1 border-t border-[#164e48]">
+                  <span>Balance on Delivery:</span>
+                  <span className="text-amber-400">LKR {formatCurrency(balanceAmount)}</span>
+                </div>
+              </div>
+
+              {/* General Order Notes */}
+              <div>
+                <label className="block text-xs font-semibold text-[#a0c4c0] mb-1">
+                  Order Memo / Customer Instructions
+                </label>
+                <textarea
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  placeholder="e.g. Call customer before dispatch. Fragile packing requested."
+                  rows={2}
+                  className="w-full px-3 py-2 bg-[#0c2e2a] border border-[#164e48] rounded-lg text-xs text-white focus:outline-none focus:ring-1 focus:ring-[#38d4c5]"
                 />
               </div>
 
-              <div className="mt-2.5 p-3 bg-gray-50 rounded-xl text-xs space-y-1">
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Advance Paid:</span>
-                  <span className="font-semibold text-emerald-700">Rs. {advancePaid.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between font-bold">
-                  <span className="text-gray-800">Balance on Delivery:</span>
-                  <span className="text-rose-600">Rs. {balanceAmount.toFixed(2)}</span>
-                </div>
+              {/* Submit Button */}
+              <button
+                type="button"
+                onClick={handleSubmitOrder}
+                disabled={createMutation.isPending || lines.length === 0 || !customerId}
+                className="w-full py-3.5 bg-[#00b4d8] hover:bg-[#0096c7] text-[#031413] rounded-xl font-bold text-sm shadow-lg shadow-[#00b4d8]/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                <CheckCircle2 className="w-5 h-5" />
+                {createMutation.isPending ? 'Confirming Order...' : 'Confirm Order & Reserve Stock'}
+              </button>
+
+              <div className="text-[11px] text-[#7aa5a0] text-center">
+                Inventory stock is immediately allocated and reserved upon confirmation.
               </div>
-            </div>
-
-            {/* Submit Button */}
-            <button
-              type="button"
-              className="w-full py-3 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold text-sm shadow-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
-              disabled={createMutation.isPending || lines.length === 0 || !customerId}
-              onClick={handleSubmitOrder}
-            >
-              <CheckCircle2 size={18} />
-              {createMutation.isPending ? 'Confirming Order...' : 'Confirm Order & Reserve Stock'}
-            </button>
-
-            <div className="text-[11px] text-gray-400 text-center flex items-center justify-center gap-1">
-              <Info size={12} />
-              Stock is immediately allocated and reserved upon confirmation.
             </div>
           </div>
         </div>
@@ -746,3 +1006,4 @@ export function NewCustomerOrderPage() {
     </div>
   )
 }
+export default NewCustomerOrderPage

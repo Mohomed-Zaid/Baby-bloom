@@ -13,7 +13,23 @@ import { listLookup } from '../services/masterData'
 import { useAuthStore } from '../stores/authStore'
 import type { StockMovementRow } from '../types/inventory'
 
-const movementTypes=['opening_stock','transfer_out','transfer_in','adjustment_in','adjustment_out','damaged','write_off','stock_count_in','stock_count_out','reversal_in','reversal_out']
+const movementTypes = [
+  'purchase_in',
+  'purchase_return_out',
+  'sale_out',
+  'sale_return_in',
+  'opening_stock',
+  'transfer_out',
+  'transfer_in',
+  'adjustment_in',
+  'adjustment_out',
+  'damaged',
+  'write_off',
+  'stock_count_in',
+  'stock_count_out',
+  'reversal_in',
+  'reversal_out'
+]
 export function StockMovementPage(){
  const [page,setPage]=useState(1),[search,setSearch]=useState(''),[dateFrom,setDateFrom]=useState(colomboNow().subtract(30,'day').format('YYYY-MM-DD')),[dateTo,setDateTo]=useState(colomboNow().format('YYYY-MM-DD')),[branch,setBranch]=useState(''),[warehouse,setWarehouse]=useState(''),[location,setLocation]=useState(''),[movementType,setMovementType]=useState('')
  const userPermissions=useAuthStore(s=>s.user?.permissions),canCost=userPermissions?.includes(permissions.inventoryViewCost)||userPermissions?.includes('products.view_cost'),canExport=userPermissions?.includes(permissions.inventoryExport)

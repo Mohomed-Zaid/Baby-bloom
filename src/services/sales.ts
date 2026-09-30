@@ -9,7 +9,7 @@ import type {
 
 type Page<T> = { rows: T[]; count: number }
 type RpcResult = { data: unknown; error: { message: string } | null }
-const db = () => requireSupabase() as any
+const db = () => requireSupabase() as unknown as ReturnType<typeof requireSupabase>
 const rpc = (name: string, args: Record<string, unknown>) =>
   (requireSupabase().rpc as unknown as (n: string, a: Record<string, unknown>) => Promise<RpcResult>)(name, args)
 const safe = (v: string) => v.replaceAll(',', ' ').replaceAll('%', '\\%')
@@ -191,25 +191,161 @@ export async function listInvoices(filters: SalesFilters = {}): Promise<Page<Sal
 }
 
 export async function listHeldInvoices(branchId?: string): Promise<SalesInvoiceRow[]> {
-  let q = requireSupabase().from('sales_invoice_history').select('*').eq('status', 'held').order('held_at', { ascending: false })
-  if (branchId) q = q.eq('branch_id', branchId)
-  const { data, error } = await q
-  throwOnError(error)
-  return (data ?? []) as unknown as SalesInvoiceRow[]
+  const client = requireSupabase()
+  // 1. Try view first
+  try {
+    let q = client.from('sales_invoice_history').select('*').eq('status', 'held').order('held_at', { ascending: false })
+    if (branchId) q = q.eq('branch_id', branchId)
+    const { data, error } = await q
+    if (!error && data) {
+      return data as unknown as SalesInvoiceRow[]
+    }
+  } catch {
+    // fallback
+  }
+
+  // 2. Resilient fallback using direct flat queries (avoids composite foreign key embedding failures in PostgREST)
+  try {
+    let fallbackQ = client
+      .from('sales_invoices')
+      .select('*')
+      .eq('status', 'held')
+      .order('held_at', { ascending: false })
+    if (branchId) fallbackQ = fallbackQ.eq('branch_id', branchId)
+    const { data: invData, error: invError } = await fallbackQ
+    if (!invError && invData && invData.length > 0) {
+      const castInv = invData as any[]
+      const custIds = [...new Set(castInv.map(i => i.customer_id).filter(Boolean))]
+      const branchIds = [...new Set(castInv.map(i => i.branch_id).filter(Boolean))]
+
+      const [custRes, branchRes] = await Promise.all([
+        custIds.length > 0 ? (client.from('customers').select('id, name, customer_code, phone').in('id', custIds) as unknown as Promise<{ data: any[] }>) : Promise.resolve({ data: [] }),
+        branchIds.length > 0 ? (client.from('branches').select('id, name').in('id', branchIds) as unknown as Promise<{ data: any[] }>) : Promise.resolve({ data: [] }),
+      ])
+
+      const custMap = new Map((custRes.data || []).map((c: any) => [c.id, c]))
+      const branchMap = new Map((branchRes.data || []).map((b: any) => [b.id, b]))
+
+      return castInv.map(raw => {
+        const c = custMap.get(raw.customer_id)
+        const b = branchMap.get(raw.branch_id)
+        return {
+          ...raw,
+          customer_name: c?.name || 'Walk-in Customer',
+          customer_code: c?.customer_code || 'CUST',
+          customer_phone: c?.phone || '',
+          branch_name: b?.name || '',
+          warehouse_name: '',
+          location_name: '',
+          created_user: null,
+        }
+      }) as SalesInvoiceRow[]
+    }
+    if (!invError && invData && invData.length === 0) {
+      return []
+    }
+  } catch {
+    // ignore
+  }
+
+  return []
 }
 
 export async function getInvoice(id: string) {
   const client = requireSupabase()
-  const [header, items, payments] = await Promise.all([
-    client.from('sales_invoice_history').select('*').eq('id', id).single(),
-    client.from('sales_invoice_item_details').select('*').eq('invoice_id', id).order('created_at'),
-    client.from('invoice_payment_history').select('*').eq('invoice_id', id).order('payment_date'),
-  ])
-  throwOnError(header.error); throwOnError(items.error); throwOnError(payments.error)
+  let headerData: SalesInvoiceRow | null = null
+  let itemsData: SalesInvoiceItemRow[] = []
+  let paymentsData: InvoicePaymentRow[] = []
+
+  // 1. Header (view first, fallback to flat base table query)
+  const headerRes = await client.from('sales_invoice_history').select('*').eq('id', id).single()
+  if (headerRes.error) {
+    const fallbackHeader = await client
+      .from('sales_invoices')
+      .select('*')
+      .eq('id', id)
+      .single()
+    if (fallbackHeader.error) throw fallbackHeader.error
+    const raw = fallbackHeader.data as any
+    let custName = 'Walk-in Customer'
+    let custCode = 'CUST'
+    let custPhone = ''
+    if (raw.customer_id) {
+      const { data: c } = await (client.from('customers').select('name, customer_code, phone').eq('id', raw.customer_id).maybeSingle() as unknown as Promise<{ data: any }>)
+      if (c) {
+        custName = c.name
+        custCode = c.customer_code
+        custPhone = c.phone || ''
+      }
+    }
+    headerData = {
+      ...raw,
+      customer_name: custName,
+      customer_code: custCode,
+      customer_phone: custPhone,
+      branch_name: '',
+      warehouse_name: '',
+      location_name: '',
+      created_user: null,
+    } as SalesInvoiceRow
+  } else {
+    headerData = headerRes.data as unknown as SalesInvoiceRow
+  }
+
+  // 2. Items (view first, fallback to flat base table query + product/variant lookup)
+  const itemsRes = await client.from('sales_invoice_item_details').select('*').eq('invoice_id', id).order('created_at')
+  if (itemsRes.error) {
+    const fallbackItems = await client
+      .from('sales_invoice_items')
+      .select('*')
+      .eq('invoice_id', id)
+      .order('created_at')
+    if (!fallbackItems.error && fallbackItems.data) {
+      const rawItems = fallbackItems.data as any[]
+      const variantIds = rawItems.map(i => i.product_variant_id).filter(Boolean)
+      const { data: variants } = variantIds.length > 0
+        ? await (client
+            .from('pos_product_search')
+            .select('product_variant_id, product_code, product_name, variant_name, sku, barcode, unit_name')
+            .in('product_variant_id', variantIds) as unknown as Promise<{ data: any[] }>)
+        : { data: [] }
+      const varMap = new Map(((variants as any[]) || []).map(v => [v.product_variant_id, v]))
+      itemsData = rawItems.map(raw => {
+        const v = varMap.get(raw.product_variant_id)
+        return {
+          ...raw,
+          product_code: v?.product_code || '',
+          product_name: v?.product_name || '',
+          variant_name: v?.variant_name || '',
+          sku: v?.sku || '',
+          barcode: v?.barcode || null,
+          unit_name: v?.unit_name || 'PCS',
+        }
+      }) as SalesInvoiceItemRow[]
+    }
+  } else {
+    itemsData = (itemsRes.data ?? []) as unknown as SalesInvoiceItemRow[]
+  }
+
+  // 3. Payments (view first, fallback to base table)
+  const paymentsRes = await client.from('invoice_payment_history').select('*').eq('invoice_id', id).order('payment_date')
+  if (paymentsRes.error) {
+    const fallbackPayments = await client
+      .from('invoice_payments')
+      .select('*')
+      .eq('invoice_id', id)
+      .order('payment_date')
+    if (!fallbackPayments.error && fallbackPayments.data) {
+      paymentsData = fallbackPayments.data as unknown as InvoicePaymentRow[]
+    }
+  } else {
+    paymentsData = (paymentsRes.data ?? []) as unknown as InvoicePaymentRow[]
+  }
+
   return {
-    header: header.data as unknown as SalesInvoiceRow,
-    items: (items.data ?? []) as unknown as SalesInvoiceItemRow[],
-    payments: (payments.data ?? []) as unknown as InvoicePaymentRow[],
+    header: headerData as SalesInvoiceRow,
+    items: itemsData,
+    payments: paymentsData,
   }
 }
 

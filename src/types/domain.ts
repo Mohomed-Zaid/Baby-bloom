@@ -38,6 +38,16 @@ export interface Customer {
   opening_balance: number; opening_balance_type: NormalBalance; price_level: PriceLevel; sms_enabled: boolean
   notes: string | null; is_active: boolean; created_at: ISODateTime; created_by: UUID | null
   updated_at: ISODateTime; updated_by: UUID | null; deleted_at: ISODateTime | null
+  nick_name?: string | null; nic?: string | null; area?: string | null; join_date?: string | null
+  payment_plan?: string | null; vat_no?: string | null; vat_percentage?: number | null
+  discount_level?: string | null; dealer_code?: string | null; sales_rep_id?: UUID | null; sales_rep_name?: string | null
+}
+
+export interface VendorMember {
+  name: string
+  phone?: string
+  email?: string
+  role?: string
 }
 
 export interface Vendor {
@@ -47,6 +57,8 @@ export interface Vendor {
   opening_balance_type: NormalBalance; products_supplied_notes: string | null; payment_terms: string | null
   notes: string | null; status: VendorStatus; created_at: ISODateTime; created_by: UUID | null
   updated_at: ISODateTime; updated_by: UUID | null; deleted_at: ISODateTime | null
+  cheque_draw_name?: string | null; become_customer?: boolean | null; due_days?: number | null
+  business_type?: string | null; members?: VendorMember[] | null
 }
 
 export interface Category { id: UUID; company_id: UUID; parent_id: UUID | null; code: string; name: string; description: string | null; is_active: boolean; created_at: ISODateTime; updated_at: ISODateTime; deleted_at: ISODateTime | null }

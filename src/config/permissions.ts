@@ -5,7 +5,7 @@ export const permissions = {
   productsView: 'products.view', productsCreate: 'products.create', productsManage: 'products.update',
   accountingView: 'accounting.view', accountingManage: 'accounting.update',
   bankingView: 'banking.view', bankingManage: 'banking.update',
-  staffManage: 'settings.update', settingsView: 'settings.view', settingsManage: 'settings.update',
+  staffView: 'settings.view', staffManage: 'settings.update', settingsView: 'settings.view', settingsManage: 'settings.update',
   invoicesManage: 'invoices.update', inventoryView: 'inventory.view', inventoryManage: 'inventory.update',
   inventoryOpening: 'inventory.create_opening_stock', inventoryTransfer: 'inventory.create_transfer',
   inventoryAdjustment: 'inventory.create_adjustment', inventoryDamage: 'inventory.record_damage',

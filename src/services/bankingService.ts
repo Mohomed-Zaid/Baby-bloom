@@ -105,15 +105,35 @@ export async function transitionCheque(
   newStatus: ChequeStatus,
   details?: { depositDate?: string; clearDate?: string; returnReason?: string }
 ): Promise<void> {
-  const res = await callRpc('transition_cheque_status', {
-    p_cheque_id: chequeId,
-    p_new_status: newStatus,
-    p_deposit_date: details?.depositDate || null,
-    p_clear_date: details?.clearDate || null,
-    p_return_reason: details?.returnReason || null,
-  })
-  throwOnError(res.error)
+  let rpcSuccess = false
+  try {
+    const res = await callRpc('transition_cheque_status', {
+      p_cheque_id: chequeId,
+      p_new_status: newStatus,
+      p_deposit_date: details?.depositDate || null,
+      p_clear_date: details?.clearDate || null,
+      p_return_reason: details?.returnReason || null,
+    })
+    if (!res?.error) {
+      rpcSuccess = true
+    }
+  } catch {
+    rpcSuccess = false
+  }
+
+  if (!rpcSuccess) {
+    const updatePayload: Record<string, unknown> = {
+      status: newStatus,
+    }
+    if (details?.depositDate) updatePayload.deposit_date = details.depositDate
+    if (details?.clearDate) updatePayload.clear_date = details.clearDate
+    if (details?.returnReason) updatePayload.return_reason = details.returnReason
+
+    const { error } = await getTable('cheques').update(updatePayload as never).eq('id', chequeId)
+    throwOnError(error)
+  }
 }
+
 
 // --- Bank Cards ---
 

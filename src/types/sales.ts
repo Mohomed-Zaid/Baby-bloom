@@ -113,7 +113,7 @@ export interface PosCartLine {
   sku: string; barcode: string | null; unit_name: string; available_quantity: number
   quantity: number; unit_price: number; cost_price: number; tax_rate: number
   discount_type: SalesDiscountType; discount_value: number; discount_amount: number; line_total: number
-  track_stock: boolean; allow_negative_stock: boolean
+  track_stock: boolean; allow_negative_stock: boolean; remarks?: string | null
 }
 
 export interface PosTender {
