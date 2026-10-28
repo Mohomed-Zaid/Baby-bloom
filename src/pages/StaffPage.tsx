@@ -213,8 +213,8 @@ export const StaffPage: React.FC = () => {
       if (isEditing && formData.id) {
         return updateStaff(formData.id, {
           first_name: formData.first_name.trim(),
-          nick_name: formData.nick_name.trim(),
-          nic: formData.nic.trim(),
+          nick_name: formData.nick_name.trim() || undefined,
+          nic: formData.nic.trim() || undefined,
           dob: formData.dob || undefined,
           gender: formData.gender,
           address: formData.address.trim(),
@@ -239,8 +239,8 @@ export const StaffPage: React.FC = () => {
         return createStaff({
           staff_code: formData.staff_code.trim() || undefined,
           first_name: formData.first_name.trim(),
-          nick_name: formData.nick_name.trim(),
-          nic: formData.nic.trim(),
+          nick_name: formData.nick_name.trim() || undefined,
+          nic: formData.nic.trim() || undefined,
           dob: formData.dob || undefined,
           gender: formData.gender,
           address: formData.address.trim(),
@@ -933,11 +933,11 @@ export const StaffPage: React.FC = () => {
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', alignItems: 'center' }}>
                     <div>
                       <label style={{ display: 'block', fontSize: '10px', fontWeight: 800, color: '#94a3b8', marginBottom: '6px', letterSpacing: '0.05em' }}>
-                        NIC <span style={{ color: '#ef4444' }}>*</span>
+                        NIC
                       </label>
                       <input
                         type="text"
-                        placeholder="NIC"
+                        placeholder="NIC (Optional)"
                         value={formData.nic}
                         onChange={(e) => setFormData({ ...formData, nic: e.target.value })}
                         style={{

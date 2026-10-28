@@ -14,6 +14,7 @@ import {
   updateWarehouse,
   toggleWarehouseStatus,
   softDeleteWarehouse,
+  getStoredWarehousesList,
   type WarehouseRow,
   type BranchOption,
 } from '../services/warehouses'
@@ -87,8 +88,8 @@ export const WarehousesPage: React.FC = () => {
 
   // Next Warehouse Code Auto-suggest
   const getNextWarehouseCode = () => {
-    if (warehouseRows.length === 0) return '001'
-    const numericCodes = warehouseRows
+    const list = getStoredWarehousesList()
+    const numericCodes = list
       .map((w) => parseInt(w.code.replace(/\D/g, ''), 10))
       .filter((n) => !isNaN(n))
     const maxNum = numericCodes.length > 0 ? Math.max(...numericCodes) : 0

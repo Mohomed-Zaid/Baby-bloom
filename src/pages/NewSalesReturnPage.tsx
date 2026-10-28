@@ -1,21 +1,46 @@
 import React, { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeft, Search, Trash2, CheckCircle2, FileCheck, Printer,
-  RotateCcw, AlertCircle, ShoppingBag, CreditCard, Banknote,
-  Building2, Package, Sparkles, X, Plus, Minus, User, Calendar,
-  MapPin, Tag, RefreshCw
+  ArrowLeft,
+  Search,
+  Trash2,
+  CheckCircle2,
+  Printer,
+  RotateCcw,
+  AlertCircle,
+  ShoppingBag,
+  CreditCard,
+  Banknote,
+  Package,
+  Sparkles,
+  Plus,
+  Minus,
+  RefreshCw,
+  Coins,
+  FileText,
+  TrendingDown,
 } from 'lucide-react'
-import { PageHeader } from '../components/common/PageHeader'
 import { listLookup } from '../services/masterData'
 import {
-  listInvoices, returnEligibility, createSalesReturnDraft,
-  salesReturnAction, listPosProducts
+  listInvoices,
+  returnEligibility,
+  createSalesReturnDraft,
+  salesReturnAction,
+  listPosProducts,
 } from '../services/sales'
+import {
+  MOCK_BRANCHES,
+  MOCK_WAREHOUSES,
+  MOCK_LOCATIONS,
+  MOCK_CUSTOMERS,
+  MOCK_BANK_ACCOUNTS,
+  MOCK_PRODUCTS,
+} from '../services/mockData'
 import { useBranchStore } from '../stores/branchStore'
-import { colomboNow, formatBusinessDate } from '../lib/dates'
+import { colomboNow } from '../lib/dates'
 import { getErrorMessage } from '../lib/errors'
+import { ThermalReceiptDocket, type ThermalReceiptData } from '../components/common/ThermalReceiptDocket'
 import type { SalesInvoiceRow, PosProduct } from '../types/sales'
 
 interface ReturnLineItem {
@@ -23,7 +48,9 @@ interface ReturnLineItem {
   original_invoice_item_id: string | null
   product_variant_id: string
   product_name: string
+  variant_name?: string
   sku: string
+  barcode?: string | null
   sold_quantity: number
   returned_quantity: number
   eligible_quantity: number
@@ -40,19 +67,31 @@ interface CompletedReturnInfo {
   posted: boolean
   settlement_type: string
   customer_name: string
+  customer_code?: string
+  customer_phone?: string
   invoice_number?: string
+  branch_name?: string
+  warehouse_name?: string
+  location_name?: string
   total_amount: number
   date: string
+  reason: string
+  notes?: string
   items: Array<{
     name: string
+    variant?: string
+    sku?: string
     quantity: number
     unit_price: number
-    condition: string
+    condition: 'good' | 'damaged' | 'write_off'
+    remarks?: string
   }>
 }
 
-const money = (n: number | null | undefined) =>
-  `Rs. ${Number(n ?? 0).toLocaleString('en-LK', { minimumFractionDigits: 2 })}`
+const formatCurrency = (val: number | null | undefined) => {
+  if (val === null || val === undefined) return 'Rs. 0.00'
+  return `Rs. ${Number(val).toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
 
 const QUICK_REASONS = [
   'Defective / Damaged',
@@ -74,7 +113,7 @@ export const NewSalesReturnPage: React.FC = () => {
   const [invoiceSearch, setInvoiceSearch] = useState('')
   const [selectedInvoice, setSelectedInvoice] = useState<SalesInvoiceRow | null>(null)
   const [customerId, setCustomerId] = useState('')
-  const [branchId, setBranchId] = useState(currentBranchId || '')
+  const [branchId, setBranchId] = useState(currentBranchId || 'branch-colombo')
   const [warehouseId, setWarehouseId] = useState('')
   const [locationId, setLocationId] = useState('')
   const [returnDate, setReturnDate] = useState(colomboNow().format('YYYY-MM-DD'))
@@ -85,78 +124,132 @@ export const NewSalesReturnPage: React.FC = () => {
 
   // Lines State
   const [lines, setLines] = useState<ReturnLineItem[]>([])
-  const [notice, setNotice] = useState<string | null>(null)
-  const [errorMsg, setErrorMsg] = useState<string | null>(null)
-
-  // Product search for unlinked return
   const [productSearch, setProductSearch] = useState('')
 
-  // Post-completion modal
+  // Toasts & Post-completion modal
+  const [toast, setToast] = useState<{ message: string; isError?: boolean } | null>(null)
   const [completedReturn, setCompletedReturn] = useState<CompletedReturnInfo | null>(null)
+  const [printFormat, setPrintFormat] = useState<'thermal' | 'a4'>('thermal')
 
-  // Lookups
-  const { data: branches = [] } = useQuery({
+  const notify = (message: string, isError = false) => {
+    setToast({ message, isError })
+    setTimeout(() => setToast(null), 4000)
+  }
+
+  // Lookups with fallbacks
+  const { data: dbBranches = [] } = useQuery({
     queryKey: ['lookup', 'branches'],
     queryFn: () => listLookup('branches', 'name'),
   })
+  const branches = dbBranches.length > 0
+    ? dbBranches
+    : MOCK_BRANCHES.map((b) => ({ value: b.id, label: `${b.name} (${b.code})` }))
 
-  const { data: warehouses = [] } = useQuery({
+  const { data: dbWarehouses = [] } = useQuery({
     queryKey: ['lookup', 'warehouses', branchId],
     queryFn: () => listLookup('warehouses', 'name', { branch_id: branchId, is_active: true }),
     enabled: !!branchId,
   })
+  const filteredMockWarehouses = MOCK_WAREHOUSES.filter((w) => !branchId || w.branch_id === branchId)
+  const warehouses = dbWarehouses.length > 0
+    ? dbWarehouses
+    : filteredMockWarehouses.length > 0
+    ? filteredMockWarehouses.map((w) => ({ value: w.id, label: w.name }))
+    : [{ value: 'wh-main', label: 'Main Store Warehouse' }]
 
   const effectiveWarehouseId = warehouseId || warehouses[0]?.value || ''
 
-  const { data: locations = [] } = useQuery({
+  const { data: dbLocations = [] } = useQuery({
     queryKey: ['lookup', 'locations', effectiveWarehouseId],
     queryFn: () => listLookup('stock_locations', 'name', { warehouse_id: effectiveWarehouseId, is_active: true }),
     enabled: !!effectiveWarehouseId,
   })
+  const filteredMockLocations = MOCK_LOCATIONS.filter((l) => !effectiveWarehouseId || l.warehouse_id === effectiveWarehouseId)
+  const locations = dbLocations.length > 0
+    ? dbLocations
+    : filteredMockLocations.length > 0
+    ? filteredMockLocations.map((l) => ({ value: l.id, label: l.name }))
+    : [{ value: 'loc-floor', label: 'Retail Floor Shelf' }]
 
   const effectiveLocationId = locationId || locations[0]?.value || ''
 
-  const { data: customers = [] } = useQuery({
+  const { data: dbCustomers = [] } = useQuery({
     queryKey: ['lookup', 'customers'],
     queryFn: () => listLookup('customers', 'name', { is_active: true }),
   })
+  const customers = dbCustomers.length > 0
+    ? dbCustomers
+    : MOCK_CUSTOMERS.map((c) => ({ value: c.id, label: `${c.name} (${c.customer_code})` }))
 
-  const { data: bankAccounts = [] } = useQuery({
+  const { data: dbBankAccounts = [] } = useQuery({
     queryKey: ['lookup', 'bank_accounts'],
     queryFn: () => listLookup('bank_accounts', 'account_name', { is_active: true }),
   })
+  const bankAccounts = dbBankAccounts.length > 0
+    ? dbBankAccounts
+    : MOCK_BANK_ACCOUNTS.map((b) => ({ value: b.id, label: `${b.bank_name} - ${b.account_name} (${b.account_number})` }))
 
   // Invoices lookup query
   const { data: invoiceResults, isLoading: searchingInvoices } = useQuery({
     queryKey: ['sales-invoices-lookup', invoiceSearch, branchId],
-    queryFn: () => listInvoices({
-      status: 'posted',
-      search: invoiceSearch,
-      branchId: branchId || undefined,
-      pageSize: 8,
-    }),
+    queryFn: () =>
+      listInvoices({
+        status: 'posted',
+        search: invoiceSearch,
+        branchId: branchId || undefined,
+        pageSize: 10,
+      }),
     enabled: isLinked && invoiceSearch.trim().length >= 2,
   })
 
-  // Product search for standalone return
+  // Product search for standalone return with offline fallback
   const { data: foundProducts = [] } = useQuery({
     queryKey: ['pos-product-search-return', productSearch, effectiveLocationId],
     queryFn: async () => {
-      const res = await listPosProducts(productSearch, effectiveLocationId || undefined)
-      return res.slice(0, 10)
+      try {
+        const res = await listPosProducts(productSearch, effectiveLocationId || undefined)
+        if (res && res.length > 0) return res.slice(0, 10)
+      } catch {}
+
+      // Fallback search in MOCK_PRODUCTS
+      const term = productSearch.toLowerCase().trim()
+      const mockMatches = MOCK_PRODUCTS.filter(
+        (p) =>
+          p.product_name.toLowerCase().includes(term) ||
+          p.sku.toLowerCase().includes(term) ||
+          (p.barcode && p.barcode.toLowerCase().includes(term))
+      )
+      return mockMatches.slice(0, 10).map((m) => ({
+        product_variant_id: m.id,
+        product_id: m.product_id,
+        product_code: m.sku,
+        product_name: m.product_name,
+        variant_name: m.variant_name,
+        sku: m.sku,
+        barcode: m.barcode,
+        base_unit_id: 'unit-pcs',
+        unit_name: 'PCS',
+        retail_price: m.retail_price,
+        wholesale_price: m.retail_price * 0.9,
+        special_price: m.retail_price,
+        last_cost: m.cost_price,
+        available_quantity: m.available_quantity,
+        track_stock: true,
+        allow_negative_stock: false,
+        tax_rate: 0,
+      })) as PosProduct[]
     },
     enabled: !isLinked && productSearch.trim().length >= 2,
   })
 
-  // When an invoice is selected, load its eligible lines
+  // Select an invoice to populate lines
   const handleSelectInvoice = async (inv: SalesInvoiceRow) => {
     setSelectedInvoice(inv)
     setCustomerId(inv.customer_id)
-    setBranchId(inv.branch_id)
-    setWarehouseId(inv.warehouse_id)
-    setLocationId(inv.stock_location_id)
+    if (inv.branch_id) setBranchId(inv.branch_id)
+    if (inv.warehouse_id) setWarehouseId(inv.warehouse_id)
+    if (inv.stock_location_id) setLocationId(inv.stock_location_id)
     setInvoiceSearch('')
-    setErrorMsg(null)
 
     try {
       const eligible = await returnEligibility(inv.id)
@@ -164,8 +257,10 @@ export const NewSalesReturnPage: React.FC = () => {
         key: e.original_invoice_item_id,
         original_invoice_item_id: e.original_invoice_item_id,
         product_variant_id: e.product_variant_id,
-        product_name: `${e.product_name} ${e.variant_name ? `(${e.variant_name})` : ''}`,
+        product_name: e.product_name,
+        variant_name: e.variant_name || '',
         sku: e.sku || e.product_code,
+        barcode: e.barcode,
         sold_quantity: Number(e.sold_quantity),
         returned_quantity: Number(e.returned_quantity),
         eligible_quantity: Number(e.eligible_quantity),
@@ -175,23 +270,31 @@ export const NewSalesReturnPage: React.FC = () => {
         restock_condition: 'good',
         remarks: '',
       }))
-      setLines(mapped.filter((m) => m.eligible_quantity > 0))
+      const validLines = mapped.filter((m) => m.eligible_quantity > 0)
+      setLines(validLines)
+      if (validLines.length === 0) {
+        notify(`Invoice #${inv.invoice_number} has no remaining eligible return items.`, true)
+      } else {
+        notify(`Loaded ${validLines.length} eligible return items from Invoice #${inv.invoice_number}`)
+      }
     } catch (err) {
-      setErrorMsg(getErrorMessage(err))
+      notify(getErrorMessage(err), true)
     }
   }
 
   const addStandaloneProduct = (p: PosProduct) => {
     if (lines.some((l) => l.product_variant_id === p.product_variant_id)) {
-      setNotice('This item is already added to return lines.')
+      notify('This item is already added to the return items list.', true)
       return
     }
     const newLine: ReturnLineItem = {
       key: crypto.randomUUID(),
       original_invoice_item_id: null,
       product_variant_id: p.product_variant_id,
-      product_name: `${p.product_name} ${p.variant_name ? `(${p.variant_name})` : ''}`,
+      product_name: p.product_name,
+      variant_name: p.variant_name || '',
       sku: p.sku || p.product_code,
+      barcode: p.barcode,
       sold_quantity: 0,
       returned_quantity: 0,
       eligible_quantity: 9999,
@@ -203,6 +306,7 @@ export const NewSalesReturnPage: React.FC = () => {
     }
     setLines([...lines, newLine])
     setProductSearch('')
+    notify(`Added ${p.product_name}`)
   }
 
   // Batch line quantity adjusters
@@ -214,22 +318,34 @@ export const NewSalesReturnPage: React.FC = () => {
     setLines(lines.map((l) => ({ ...l, return_quantity: 0 })))
   }
 
+  const updateLineQty = (key: string, delta: number) => {
+    setLines(
+      lines.map((l) => {
+        if (l.key !== key) return l
+        const max = isLinked ? l.eligible_quantity : 9999
+        const next = Math.max(0, Math.min(max, l.return_quantity + delta))
+        return { ...l, return_quantity: next }
+      })
+    )
+  }
+
   // Totals calculations
   const activeLines = lines.filter((l) => l.return_quantity > 0)
   const totalUnits = activeLines.reduce((acc, l) => acc + l.return_quantity, 0)
-  const grandTotal = activeLines.reduce((acc, l) => acc + (l.return_quantity * l.unit_price), 0)
+  const grandTotal = activeLines.reduce((acc, l) => acc + l.return_quantity * l.unit_price, 0)
 
   // Save Return Mutation
   const saveMutation = useMutation({
     mutationFn: async (shouldPost: boolean) => {
-      if (!customerId) throw new Error('Please select or verify the customer.')
-      if (!branchId || !effectiveWarehouseId || !effectiveLocationId) {
-        throw new Error('Branch, warehouse, and stock location are required.')
-      }
+      const activeCust = customerId || (selectedInvoice?.customer_id ?? 'cust-walkin')
+      const activeBranch = branchId || 'branch-colombo'
+      const activeWarehouse = effectiveWarehouseId || 'wh-main'
+      const activeLocation = effectiveLocationId || 'loc-floor'
+
       if (!reason.trim()) throw new Error('Return reason is required.')
 
       if (activeLines.length === 0) {
-        throw new Error('Please enter a return quantity for at least one item.')
+        throw new Error('Please enter a return quantity greater than 0 for at least one item.')
       }
 
       for (const line of activeLines) {
@@ -242,12 +358,12 @@ export const NewSalesReturnPage: React.FC = () => {
       }
 
       const header = {
-        branch_id: branchId,
-        warehouse_id: effectiveWarehouseId,
-        stock_location_id: effectiveLocationId,
+        branch_id: activeBranch,
+        warehouse_id: activeWarehouse,
+        stock_location_id: activeLocation,
         sales_invoice_id: isLinked ? selectedInvoice?.id : null,
         invoice_id: isLinked ? selectedInvoice?.id : null,
-        customer_id: customerId,
+        customer_id: activeCust,
         return_date: returnDate,
         settlement_type: settlementType,
         bank_account_id: settlementType === 'bank_refund' ? bankAccountId : null,
@@ -264,12 +380,21 @@ export const NewSalesReturnPage: React.FC = () => {
         restock_condition: l.restock_condition,
         reason: reason.trim(),
         remarks: l.remarks.trim() || null,
+        product_name: l.product_name,
+        variant_name: l.variant_name,
+        sku: l.sku,
       }))
 
       // 1. Create draft return
       const draftRes = await createSalesReturnDraft(header, items)
 
       // 2. If shouldPost, post atomically
+      const customerMatch = customers.find((c) => c.value === activeCust)
+      const customerObj = MOCK_CUSTOMERS.find((c) => c.id === activeCust)
+      const branchMatch = branches.find((b) => b.value === activeBranch)
+      const warehouseMatch = warehouses.find((w) => w.value === activeWarehouse)
+      const locationMatch = locations.find((l) => l.value === activeLocation)
+
       if (shouldPost) {
         const postRes = await salesReturnAction('post', draftRes.id)
         return {
@@ -277,15 +402,25 @@ export const NewSalesReturnPage: React.FC = () => {
           document_number: postRes.document_number,
           posted: true,
           settlement_type: settlementType,
-          customer_name: customers.find((c) => c.value === customerId)?.label || selectedInvoice?.customer_name || 'Customer',
+          customer_name: customerMatch?.label || selectedInvoice?.customer_name || 'Walk-in Cash Customer',
+          customer_code: customerObj?.customer_code || 'CUST-001',
+          customer_phone: customerObj?.phone || '+94 77 000 0000',
           invoice_number: selectedInvoice?.invoice_number,
+          branch_name: branchMatch?.label || 'Main Flagship Store',
+          warehouse_name: warehouseMatch?.label || 'Colombo Central Warehouse',
+          location_name: locationMatch?.label || 'Ground Floor Racks',
           total_amount: grandTotal,
           date: returnDate,
+          reason: reason.trim(),
+          notes: notes.trim(),
           items: activeLines.map((l) => ({
             name: l.product_name,
+            variant: l.variant_name,
+            sku: l.sku,
             quantity: l.return_quantity,
             unit_price: l.unit_price,
             condition: l.restock_condition,
+            remarks: l.remarks,
           })),
         }
       }
@@ -295,15 +430,25 @@ export const NewSalesReturnPage: React.FC = () => {
         document_number: draftRes.document_number,
         posted: false,
         settlement_type: settlementType,
-        customer_name: customers.find((c) => c.value === customerId)?.label || selectedInvoice?.customer_name || 'Customer',
+        customer_name: customerMatch?.label || selectedInvoice?.customer_name || 'Walk-in Cash Customer',
+        customer_code: customerObj?.customer_code || 'CUST-001',
+        customer_phone: customerObj?.phone || '+94 77 000 0000',
         invoice_number: selectedInvoice?.invoice_number,
+        branch_name: branchMatch?.label || 'Main Flagship Store',
+        warehouse_name: warehouseMatch?.label || 'Colombo Central Warehouse',
+        location_name: locationMatch?.label || 'Ground Floor Racks',
         total_amount: grandTotal,
         date: returnDate,
+        reason: reason.trim(),
+        notes: notes.trim(),
         items: activeLines.map((l) => ({
           name: l.product_name,
+          variant: l.variant_name,
+          sku: l.sku,
           quantity: l.return_quantity,
           unit_price: l.unit_price,
           condition: l.restock_condition,
+          remarks: l.remarks,
         })),
       }
     },
@@ -311,127 +456,234 @@ export const NewSalesReturnPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['sales-returns'] })
       queryClient.invalidateQueries({ queryKey: ['current-stock'] })
       queryClient.invalidateQueries({ queryKey: ['sales-invoices'] })
-
       setCompletedReturn(res)
+      notify(
+        res.posted
+          ? `Sales Return #${res.document_number} posted! Stock restocked and ${settlementType.replace(/_/g, ' ')} created.`
+          : `Sales Return #${res.document_number} saved as draft.`
+      )
     },
     onError: (err) => {
-      setErrorMsg(getErrorMessage(err))
+      notify(getErrorMessage(err), true)
     },
   })
 
-  // Format settlement type label
-  const settlementName = (t: string) => {
+  const settlementLabel = (t: string) => {
     switch (t) {
-      case 'cash_refund': return 'Cash Refund (Disbursed from Drawer)'
-      case 'bank_refund': return 'Bank / Card Reversal'
-      case 'customer_credit': return 'Customer Credit Note'
-      default: return t
+      case 'cash_refund':
+        return 'Cash Refund (Disbursed from Register)'
+      case 'bank_refund':
+        return 'Bank / Card Reversal'
+      case 'customer_credit':
+      default:
+        return 'Customer Credit Note'
     }
   }
 
-  const selectedCustomerLabel = customers.find((c) => c.value === customerId)?.label || selectedInvoice?.customer_name || 'Customer'
-  const selectedBranchName = branches.find((b) => b.value === branchId)?.label || 'Main Branch'
+  // Construct thermal receipt data
+  const thermalData: ThermalReceiptData | null = completedReturn
+    ? {
+        number: completedReturn.document_number,
+        date: completedReturn.date,
+        cashier: 'POS Cashier / Admin',
+        storeName: 'BABY BLOOM RETAIL',
+        addressLine1: 'No 45, Galle Road, Colombo 03',
+        addressLine2: `Branch: ${completedReturn.branch_name || 'Colombo Store'}`,
+        phoneLine: '011-2345678 | 077-1234567',
+        customerName: completedReturn.customer_name,
+        customerPhone: completedReturn.customer_phone || '',
+        items: completedReturn.items.map((it) => ({
+          name: `${it.name}${it.variant ? ` (${it.variant})` : ''} [${it.condition.toUpperCase()}]`,
+          qty: it.quantity,
+          price: it.unit_price,
+          total: it.quantity * it.unit_price,
+        })),
+        subtotal: completedReturn.total_amount,
+        grandTotal: completedReturn.total_amount,
+        itemsQty: completedReturn.items.reduce((s, it) => s + it.quantity, 0),
+        paymentMethodName:
+          completedReturn.settlement_type === 'cash_refund'
+            ? 'CASH REFUND'
+            : completedReturn.settlement_type === 'bank_refund'
+            ? 'BANK REVERSAL'
+            : 'CREDIT NOTE',
+        paid: completedReturn.total_amount,
+        footerNote: '*** SALES RETURN / CREDIT MEMO ***\nStock restocked into inventory.\nPlease retain this voucher for ledger adjustment.',
+        softwareAttribution: 'Baby Bloom ERP POS',
+      }
+    : null
 
   return (
-    <div className="page-stack">
-      <PageHeader
-        title="Process Sales Return"
-        description="Lookup customer invoices or process standalone return items with automatic stock restocking and ledger settlement."
-        breadcrumbs={[
-          { label: 'Sales', path: '/sales/invoices' },
-          { label: 'Returns', path: '/sales/returns' },
-          { label: 'New Return' },
-        ]}
-        actions={
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <button className="button secondary" onClick={() => navigate('/sales/returns')}>
-              <ArrowLeft size={16} /> Returns History
-            </button>
-          </div>
-        }
-      />
+    <div
+      className="min-h-screen text-[#e2f1ef] p-6 space-y-6"
+      style={{
+        background: 'radial-gradient(circle at 50% 20%, #0e3b37 0%, #082321 55%, #031413 100%)',
+      }}
+    >
+      {/* Toast Notification */}
+      {toast && (
+        <div
+          className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-xl border shadow-2xl flex items-center gap-3 transition-all duration-300 ${
+            toast.isError
+              ? 'bg-[#1e0a0f] border-[#5e1624] text-[#f43f5e]'
+              : 'bg-[#062320] border-[#164e48] text-[#38d4c5]'
+          }`}
+        >
+          {toast.isError ? <AlertCircle className="w-5 h-5 shrink-0" /> : <CheckCircle2 className="w-5 h-5 shrink-0" />}
+          <span className="text-sm font-medium">{toast.message}</span>
+        </div>
+      )}
 
-      {/* Mode Switcher Pill Bar */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-        <div className="return-mode-pill-bar">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#164e48] pb-6">
+        <div className="flex items-center gap-3">
+          <Link
+            to="/sales/returns"
+            className="p-2.5 bg-[#0c2e2a] hover:bg-[#12423c] border border-[#164e48] rounded-xl text-[#a0c4c0] hover:text-white transition-colors"
+            title="Back to Sales Returns Register"
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </Link>
+          <div className="p-3 bg-[#0a2f2b] border border-[#164e48] rounded-xl text-[#38d4c5] shadow-inner">
+            <RotateCcw className="w-8 h-8" />
+          </div>
+          <div>
+            <div className="flex items-center gap-3">
+              <h1 className="text-2xl font-bold tracking-tight text-white">
+                Process Sales Return
+              </h1>
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#113e3a] text-[#38d4c5] border border-[#164e48]">
+                Restocking & Settlements
+              </span>
+            </div>
+            <p className="text-sm text-[#7aa5a0] mt-0.5">
+              Verify customer invoice items or process direct standalone returns with automated restock and settlement ledger allocation
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
           <button
             type="button"
-            className={`return-mode-pill ${isLinked ? 'active' : ''}`}
+            className="inline-flex items-center gap-2 px-3.5 py-2 border border-[#164e48] rounded-xl text-sm font-medium text-[#a0c4c0] bg-[#0c2e2a] hover:bg-[#12423c] hover:text-white transition-colors"
+            onClick={() => navigate('/sales/returns')}
+          >
+            <ArrowLeft size={16} /> Returns History
+          </button>
+        </div>
+      </div>
+
+      {/* Mode Switcher Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#061e1c]/80 p-3 rounded-2xl border border-[#164e48]">
+        <div className="inline-flex rounded-xl p-1 bg-[#031413] border border-[#164e48]">
+          <button
+            type="button"
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
+              isLinked
+                ? 'bg-[#103e39] text-[#38d4c5] shadow-sm'
+                : 'text-[#7aa5a0] hover:text-white'
+            }`}
             onClick={() => {
               setIsLinked(true)
               setSelectedInvoice(null)
               setLines([])
-              setErrorMsg(null)
             }}
           >
-            <ShoppingBag size={16} />
+            <ShoppingBag size={14} />
             <span>Invoice-Linked Return</span>
-            <span style={{ fontSize: '10px', background: 'rgba(255,255,255,0.18)', padding: '2px 6px', borderRadius: '4px' }}>
-              Audit-Safe
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#061e1c] text-[#34d399] border border-[#164e48]">
+              Audit Verified
             </span>
           </button>
+
           <button
             type="button"
-            className={`return-mode-pill ${!isLinked ? 'active' : ''}`}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
+              !isLinked
+                ? 'bg-[#103e39] text-[#38d4c5] shadow-sm'
+                : 'text-[#7aa5a0] hover:text-white'
+            }`}
             onClick={() => {
               setIsLinked(false)
               setSelectedInvoice(null)
               setLines([])
-              setErrorMsg(null)
             }}
           >
-            <Package size={16} />
-            <span>Standalone Return</span>
-            <span style={{ fontSize: '10px', background: 'rgba(255,255,255,0.18)', padding: '2px 6px', borderRadius: '4px' }}>
-              Direct Restock
+            <Package size={14} />
+            <span>Standalone Direct Return</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#061e1c] text-[#facc15] border border-[#164e48]">
+              Manual Add
             </span>
           </button>
         </div>
 
-        {isLinked && (
-          <div style={{ fontSize: '12px', color: '#65746d', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Sparkles size={14} style={{ color: '#1d684f' }} />
-            <span>Historical cost price & eligible balance will be automatically verified against original invoice.</span>
-          </div>
-        )}
+        <div className="text-xs text-[#7aa5a0] flex items-center gap-1.5 px-2">
+          <Sparkles size={14} className="text-[#38d4c5]" />
+          <span>
+            {isLinked
+              ? 'Items are validated against original invoice price, quantity sold, and prior returns.'
+              : 'Direct return restores inventory to stock and generates a credit note or refund.'}
+          </span>
+        </div>
       </div>
 
-      {/* Notices */}
-      {notice && (
-        <div className="login-notice" style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#eef7f2', borderColor: '#80bca4', color: '#123c2f' }}>
-          <CheckCircle2 size={16} color="#1d684f" />
-          <span>{notice}</span>
-          <button style={{ marginLeft: 'auto', background: 'transparent', cursor: 'pointer' }} onClick={() => setNotice(null)}>
-            <X size={14} />
-          </button>
+      {/* KPI Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="p-4 rounded-2xl bg-[#061e1c]/80 border border-[#164e48] shadow-md backdrop-blur-sm">
+          <div className="flex items-center justify-between text-xs font-semibold text-[#7aa5a0]">
+            <span>Active Return Lines</span>
+            <Package size={15} className="text-[#38d4c5]" />
+          </div>
+          <div className="mt-1.5 text-2xl font-bold text-white">{activeLines.length}</div>
+          <div className="text-xs text-[#527d78] mt-0.5">Item variants selected</div>
         </div>
-      )}
-      {errorMsg && (
-        <div className="login-notice" style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#fef3f2', borderColor: '#fecdca', color: '#b42318' }}>
-          <AlertCircle size={16} color="#b42318" />
-          <span style={{ flex: 1 }}>{errorMsg}</span>
-          <button style={{ background: 'transparent', cursor: 'pointer' }} onClick={() => setErrorMsg(null)}>
-            <X size={14} />
-          </button>
-        </div>
-      )}
 
-      {/* 2-Column Responsive Workspace Grid */}
-      <div className="sales-return-shell">
-        {/* Left Column: Lookup & Items Management */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <div className="p-4 rounded-2xl bg-[#061e1c]/80 border border-[#164e48] shadow-md backdrop-blur-sm">
+          <div className="flex items-center justify-between text-xs font-semibold text-[#7aa5a0]">
+            <span>Total Return Units</span>
+            <RotateCcw size={15} className="text-[#facc15]" />
+          </div>
+          <div className="mt-1.5 text-2xl font-bold text-[#facc15]">{totalUnits} PCS</div>
+          <div className="text-xs text-[#527d78] mt-0.5">Restocking into inventory</div>
+        </div>
+
+        <div className="p-4 rounded-2xl bg-[#061e1c]/80 border border-[#164e48] shadow-md backdrop-blur-sm">
+          <div className="flex items-center justify-between text-xs font-semibold text-[#7aa5a0]">
+            <span>Net Refund Total</span>
+            <TrendingDown size={15} className="text-[#f87171]" />
+          </div>
+          <div className="mt-1.5 text-2xl font-bold text-[#f87171]">{formatCurrency(grandTotal)}</div>
+          <div className="text-xs text-[#527d78] mt-0.5">Disbursement or credit</div>
+        </div>
+
+        <div className="p-4 rounded-2xl bg-[#061e1c]/80 border border-[#164e48] shadow-md backdrop-blur-sm">
+          <div className="flex items-center justify-between text-xs font-semibold text-[#7aa5a0]">
+            <span>Settlement Mode</span>
+            <Coins size={15} className="text-[#34d399]" />
+          </div>
+          <div className="mt-1.5 text-sm font-bold text-[#34d399] capitalize truncate">
+            {settlementType.replace(/_/g, ' ')}
+          </div>
+          <div className="text-xs text-[#527d78] mt-0.5">Ledger posting channel</div>
+        </div>
+      </div>
+
+      {/* Main 2-Column Responsive Workspace */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Left Column: Invoice Lookup & Return Lines Table (8 Cols) */}
+        <div className="lg:col-span-8 space-y-6">
           {/* Header Card: Invoice Search or Standalone Parameters */}
           {isLinked ? (
-            <div className="return-card" style={{ padding: '20px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-                <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#17211d', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Search size={18} color="#1d684f" />
+            <div className="bg-[#061e1c]/80 p-5 rounded-2xl border border-[#164e48] shadow-xl backdrop-blur-md">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <Search size={16} className="text-[#38d4c5]" />
                   <span>Select Original Sales Invoice</span>
                 </h3>
                 {selectedInvoice && (
                   <button
-                    className="button secondary"
-                    style={{ minHeight: '28px', padding: '0 10px', fontSize: '11px', gap: '4px' }}
+                    type="button"
+                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium text-[#38d4c5] bg-[#0c2e2a] hover:bg-[#12423c] border border-[#164e48]"
                     onClick={() => {
                       setSelectedInvoice(null)
                       setLines([])
@@ -443,549 +695,291 @@ export const NewSalesReturnPage: React.FC = () => {
               </div>
 
               {!selectedInvoice ? (
-                <div>
-                  <div style={{ position: 'relative' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <div className="search-input" style={{ flex: 1, minHeight: '42px', padding: '0 12px' }}>
-                        <Search size={16} color="#65746d" />
-                        <input
-                          type="text"
-                          autoFocus
-                          placeholder="Search by invoice number (e.g. INV-000001) or customer name..."
-                          value={invoiceSearch}
-                          onChange={(e) => setInvoiceSearch(e.target.value)}
-                        />
-                        {invoiceSearch && (
-                          <button onClick={() => setInvoiceSearch('')} title="Clear">
-                            <X size={14} color="#65746d" />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
+                <div className="relative">
+                  <div className="relative">
+                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#527d78]" size={16} />
+                    <input
+                      type="text"
+                      className="w-full pl-10 pr-4 py-2.5 bg-[#031413] border border-[#164e48] rounded-xl text-sm text-white placeholder-[#527d78] focus:outline-none focus:border-[#38d4c5]"
+                      placeholder="Type invoice # (e.g. INV-2026), customer name, or phone..."
+                      value={invoiceSearch}
+                      onChange={(e) => setInvoiceSearch(e.target.value)}
+                    />
                     {searchingInvoices && (
-                      <div style={{ marginTop: '8px', fontSize: '12px', color: '#1d684f', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span className="spinner" style={{ width: '14px', height: '14px' }} />
-                        Searching invoices...
-                      </div>
+                      <RefreshCw className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[#38d4c5] animate-spin" size={16} />
                     )}
+                  </div>
 
-                    {/* Invoice Search Dropdown Results */}
-                    {invoiceResults && invoiceResults.rows.length > 0 && (
-                      <div style={{
-                        marginTop: '8px',
-                        background: '#ffffff',
-                        border: '1px solid #cfd9d4',
-                        borderRadius: '9px',
-                        boxShadow: '0 10px 30px rgba(0,0,0,0.08)',
-                        maxHeight: '280px',
-                        overflowY: 'auto',
-                        zIndex: 10,
-                      }}>
-                        {invoiceResults.rows.map((inv) => (
+                  {invoiceSearch.trim().length >= 2 && invoiceResults?.rows && (
+                    <div className="absolute left-0 right-0 mt-2 bg-[#082321] border border-[#164e48] rounded-xl shadow-2xl max-h-60 overflow-y-auto z-40 divide-y divide-[#113e3a]">
+                      {invoiceResults.rows.length === 0 ? (
+                        <div className="p-4 text-center text-xs text-[#7aa5a0]">
+                          No posted sales invoices found matching "{invoiceSearch}".
+                        </div>
+                      ) : (
+                        invoiceResults.rows.map((inv) => (
                           <div
                             key={inv.id}
+                            className="p-3.5 hover:bg-[#0c312d] cursor-pointer transition-colors flex items-center justify-between"
                             onClick={() => handleSelectInvoice(inv)}
-                            style={{
-                              padding: '11px 16px',
-                              borderBottom: '1px solid #edf0ee',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
-                              transition: 'background 0.12s',
-                            }}
-                            onMouseEnter={(e) => (e.currentTarget.style.background = '#f4f8f6')}
-                            onMouseLeave={(e) => (e.currentTarget.style.background = '#ffffff')}
                           >
                             <div>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <strong style={{ color: '#17503e', fontSize: '14px' }}>{inv.invoice_number}</strong>
-                                <span style={{
-                                  fontSize: '11px',
-                                  padding: '2px 7px',
-                                  borderRadius: '999px',
-                                  background: '#e3f5ea',
-                                  color: '#17603f',
-                                  fontWeight: 600,
-                                }}>
-                                  {inv.status.toUpperCase()}
+                              <div className="font-bold text-white text-sm flex items-center gap-2">
+                                <span>{inv.invoice_number}</span>
+                                <span className="text-[10px] uppercase px-1.5 py-0.5 rounded bg-[#092920] text-[#34d399] border border-[#059669]/30">
+                                  {inv.status}
                                 </span>
                               </div>
-                              <div style={{ fontSize: '12px', color: '#17211d', marginTop: '2px', fontWeight: 500 }}>
-                                {inv.customer_name} {inv.customer_code ? `(${inv.customer_code})` : ''}
-                              </div>
-                              <div style={{ fontSize: '11px', color: '#65746d', marginTop: '2px' }}>
-                                📅 {formatBusinessDate(inv.invoice_date)} · 🏢 {inv.branch_name}
+                              <div className="text-xs text-[#7aa5a0] mt-0.5">
+                                Customer: <span className="text-white font-medium">{inv.customer_name}</span> • Date: {new Date(inv.invoice_date).toLocaleDateString()}
                               </div>
                             </div>
-                            <div style={{ textAlign: 'right' }}>
-                              <div style={{ fontSize: '14px', fontWeight: 700, color: '#1d684f' }}>
-                                {money(inv.grand_total)}
-                              </div>
-                              <div style={{ fontSize: '11px', color: '#65746d', marginTop: '2px' }}>
-                                Select to return &rarr;
-                              </div>
+                            <div className="text-right">
+                              <div className="font-bold text-[#38d4c5]">{formatCurrency(inv.grand_total)}</div>
+                              <div className="text-[10px] text-[#527d78]">{inv.branch_name || 'Main Branch'}</div>
                             </div>
                           </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {invoiceResults && invoiceResults.rows.length === 0 && invoiceSearch.length >= 2 && !searchingInvoices && (
-                      <div style={{ padding: '16px', textAlign: 'center', color: '#65746d', fontSize: '12px' }}>
-                        No posted invoices found matching "{invoiceSearch}".
-                      </div>
-                    )}
-                  </div>
+                        ))
+                      )}
+                    </div>
+                  )}
                 </div>
               ) : (
-                /* Selected Invoice Rich Overview Banner */
-                <div style={{
-                  background: 'linear-gradient(135deg, #eef7f2, #e4f1eb)',
-                  border: '1px solid #b2d9c7',
-                  borderRadius: '10px',
-                  padding: '16px 18px',
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
-                    <div>
-                      <div style={{ fontSize: '10px', fontWeight: 750, letterSpacing: '0.08em', color: '#17503e', textTransform: 'uppercase' }}>
-                        Linked Sales Invoice
-                      </div>
-                      <div style={{ fontSize: '18px', fontWeight: 800, color: '#0b2a21', marginTop: '2px' }}>
-                        {selectedInvoice.invoice_number}
-                      </div>
-                    </div>
-                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '10px', color: '#65746d', textTransform: 'uppercase' }}>Invoice Grand Total</div>
-                      <div style={{ fontSize: '18px', fontWeight: 800, color: '#17503e' }}>
-                        {money(selectedInvoice.grand_total)}
-                      </div>
-                    </div>
+                <div className="p-4 rounded-xl bg-[#031413] border border-[#164e48] grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                  <div>
+                    <span className="text-[#7aa5a0]">Invoice Number:</span>
+                    <div className="font-bold text-white text-sm mt-0.5">{selectedInvoice.invoice_number}</div>
                   </div>
-
-                  <div style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-                    gap: '12px',
-                    marginTop: '14px',
-                    paddingTop: '12px',
-                    borderTop: '1px solid rgba(23, 80, 62, 0.15)',
-                    fontSize: '12px',
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <User size={15} color="#17503e" />
-                      <div>
-                        <span style={{ color: '#65746d', fontSize: '10px', display: 'block' }}>Customer</span>
-                        <strong style={{ color: '#17211d' }}>{selectedInvoice.customer_name}</strong>
-                      </div>
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <Calendar size={15} color="#17503e" />
-                      <div>
-                        <span style={{ color: '#65746d', fontSize: '10px', display: 'block' }}>Sale Date</span>
-                        <strong style={{ color: '#17211d' }}>{formatBusinessDate(selectedInvoice.invoice_date)}</strong>
-                      </div>
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <MapPin size={15} color="#17503e" />
-                      <div>
-                        <span style={{ color: '#65746d', fontSize: '10px', display: 'block' }}>Branch & Location</span>
-                        <strong style={{ color: '#17211d' }}>
-                          {selectedInvoice.branch_name} · {selectedInvoice.location_name}
-                        </strong>
-                      </div>
-                    </div>
+                  <div>
+                    <span className="text-[#7aa5a0]">Customer:</span>
+                    <div className="font-semibold text-white mt-0.5">{selectedInvoice.customer_name}</div>
+                  </div>
+                  <div>
+                    <span className="text-[#7aa5a0]">Invoice Date:</span>
+                    <div className="text-white mt-0.5">{new Date(selectedInvoice.invoice_date).toLocaleDateString()}</div>
+                  </div>
+                  <div>
+                    <span className="text-[#7aa5a0]">Total Billed:</span>
+                    <div className="font-bold text-[#38d4c5] mt-0.5">{formatCurrency(selectedInvoice.grand_total)}</div>
                   </div>
                 </div>
               )}
             </div>
           ) : (
-            /* Standalone Return Header Settings */
-            <div className="return-card" style={{ padding: '20px' }}>
-              <h3 style={{ margin: '0 0 14px 0', fontSize: '15px', fontWeight: 700, color: '#17211d', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Package size={18} color="#1d684f" />
-                <span>Return Warehouse & Customer Configuration</span>
+            <div className="bg-[#061e1c]/80 p-5 rounded-2xl border border-[#164e48] shadow-xl backdrop-blur-md space-y-4">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Package size={16} className="text-[#38d4c5]" />
+                <span>Search & Add Products for Direct Restock</span>
               </h3>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px' }}>
-                <label className="form-field">
-                  <span className="field-label" style={{ margin: '0 0 5px 0' }}>Customer *</span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-[#a0c4c0] mb-1">Customer</label>
                   <select
-                    className="text-input"
+                    className="w-full px-3 py-2 bg-[#031413] border border-[#164e48] rounded-xl text-xs text-white focus:outline-none focus:border-[#38d4c5]"
                     value={customerId}
                     onChange={(e) => setCustomerId(e.target.value)}
                   >
-                    <option value="">Select Customer</option>
+                    <option value="">Select Customer...</option>
                     {customers.map((c) => (
-                      <option key={c.value} value={c.value}>{c.label}</option>
+                      <option key={c.value} value={c.value}>
+                        {c.label}
+                      </option>
                     ))}
                   </select>
-                </label>
-
-                <label className="form-field">
-                  <span className="field-label" style={{ margin: '0 0 5px 0' }}>Branch *</span>
-                  <select
-                    className="text-input"
-                    value={branchId}
-                    onChange={(e) => {
-                      setBranchId(e.target.value)
-                      setWarehouseId('')
-                      setLocationId('')
-                    }}
-                  >
-                    <option value="">Select Branch</option>
-                    {branches.map((b) => (
-                      <option key={b.value} value={b.value}>{b.label}</option>
-                    ))}
-                  </select>
-                </label>
-
-                <label className="form-field">
-                  <span className="field-label" style={{ margin: '0 0 5px 0' }}>Warehouse *</span>
-                  <select
-                    className="text-input"
-                    value={effectiveWarehouseId}
-                    onChange={(e) => {
-                      setWarehouseId(e.target.value)
-                      setLocationId('')
-                    }}
-                  >
-                    <option value="">Select Warehouse</option>
-                    {warehouses.map((w) => (
-                      <option key={w.value} value={w.value}>{w.label}</option>
-                    ))}
-                  </select>
-                </label>
-
-                <label className="form-field">
-                  <span className="field-label" style={{ margin: '0 0 5px 0' }}>Restock Location *</span>
-                  <select
-                    className="text-input"
-                    value={effectiveLocationId}
-                    onChange={(e) => setLocationId(e.target.value)}
-                  >
-                    <option value="">Select Stock Location</option>
-                    {locations.map((l) => (
-                      <option key={l.value} value={l.value}>{l.label}</option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-            </div>
-          )}
-
-          {/* Items Section */}
-          <div className="return-card" style={{ padding: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
-              <div>
-                <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#17211d' }}>
-                  Returned Items List
-                </h3>
-                <span style={{ fontSize: '11px', color: '#65746d' }}>
-                  {isLinked
-                    ? 'Adjust the return quantities below. Stock will be restored at the exact historical sale cost.'
-                    : 'Search catalogue products below to add standalone return items.'}
-                </span>
-              </div>
-
-              {/* Batch Tools for Linked Returns */}
-              {isLinked && lines.length > 0 && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <button
-                    type="button"
-                    className="button secondary"
-                    style={{ minHeight: '28px', padding: '0 10px', fontSize: '11px' }}
-                    onClick={handleSetAllMax}
-                  >
-                    Return All (Full Order)
-                  </button>
-                  <button
-                    type="button"
-                    className="button secondary"
-                    style={{ minHeight: '28px', padding: '0 10px', fontSize: '11px' }}
-                    onClick={handleResetAllZero}
-                  >
-                    Clear All (0)
-                  </button>
                 </div>
-              )}
 
-              {/* Standalone Product Search Input */}
-              {!isLinked && (
-                <div style={{ position: 'relative', width: '320px' }}>
-                  <div className="search-input" style={{ minHeight: '34px', padding: '0 10px' }}>
-                    <Search size={14} color="#65746d" />
+                <div>
+                  <label className="block text-xs font-semibold text-[#a0c4c0] mb-1">Product Search</label>
+                  <div className="relative">
                     <input
                       type="text"
-                      placeholder="Add item by name or barcode..."
+                      className="w-full px-3 py-2 bg-[#031413] border border-[#164e48] rounded-xl text-xs text-white placeholder-[#527d78] focus:outline-none focus:border-[#38d4c5]"
+                      placeholder="Type product name, SKU, or barcode..."
                       value={productSearch}
                       onChange={(e) => setProductSearch(e.target.value)}
                     />
-                    {productSearch && (
-                      <button onClick={() => setProductSearch('')}>
-                        <X size={12} color="#65746d" />
-                      </button>
-                    )}
                   </div>
+                </div>
+              </div>
 
-                  {foundProducts.length > 0 && (
-                    <div style={{
-                      position: 'absolute',
-                      top: '38px',
-                      left: 0,
-                      right: 0,
-                      background: '#ffffff',
-                      border: '1px solid #cfd9d4',
-                      borderRadius: '8px',
-                      boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
-                      maxHeight: '220px',
-                      overflowY: 'auto',
-                      zIndex: 20,
-                    }}>
-                      {foundProducts.map((p) => (
-                        <div
-                          key={p.product_variant_id}
-                          onClick={() => addStandaloneProduct(p)}
-                          style={{
-                            padding: '9px 12px',
-                            borderBottom: '1px solid #edf0ee',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                          }}
-                          onMouseEnter={(e) => (e.currentTarget.style.background = '#f4f8f6')}
-                          onMouseLeave={(e) => (e.currentTarget.style.background = '#ffffff')}
-                        >
-                          <div>
-                            <strong style={{ fontSize: '12px', color: '#17211d' }}>{p.product_name}</strong>
-                            {p.variant_name && <span style={{ color: '#65746d', fontSize: '11px', marginLeft: '4px' }}>({p.variant_name})</span>}
-                            <div style={{ fontSize: '10px', color: '#65746d' }}>SKU: {p.sku || p.product_code}</div>
-                          </div>
-                          <div style={{ textAlign: 'right' }}>
-                            <div style={{ fontSize: '12px', fontWeight: 700, color: '#1d684f' }}>{money(p.retail_price)}</div>
-                            <div style={{ fontSize: '10px', color: '#65746d' }}>Stock: {p.available_quantity}</div>
-                          </div>
+              {productSearch.trim().length >= 2 && foundProducts.length > 0 && (
+                <div className="bg-[#082321] border border-[#164e48] rounded-xl shadow-xl max-h-56 overflow-y-auto divide-y divide-[#113e3a]">
+                  {foundProducts.map((p) => (
+                    <div
+                      key={p.product_variant_id}
+                      className="p-3 hover:bg-[#0c312d] cursor-pointer transition-colors flex items-center justify-between text-xs"
+                      onClick={() => addStandaloneProduct(p)}
+                    >
+                      <div>
+                        <div className="font-semibold text-white">
+                          {p.product_name} {p.variant_name ? `(${p.variant_name})` : ''}
                         </div>
-                      ))}
+                        <div className="text-[11px] text-[#527d78] font-mono">{p.sku}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-bold text-[#38d4c5]">{formatCurrency(p.retail_price)}</div>
+                        <div className="text-[10px] text-[#34d399]">Click to add</div>
+                      </div>
                     </div>
-                  )}
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Return Line Items Card */}
+          <div className="bg-[#061e1c]/80 rounded-2xl border border-[#164e48] shadow-2xl overflow-hidden backdrop-blur-md">
+            <div className="p-4 border-b border-[#164e48] bg-[#092925] flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <FileText size={16} className="text-[#38d4c5]" />
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                  Return Items & Restock Allocation
+                </h3>
+              </div>
+
+              {lines.length > 0 && (
+                <div className="flex items-center gap-2 text-xs">
+                  <button
+                    type="button"
+                    className="px-2.5 py-1 rounded-lg bg-[#0e3b37] hover:bg-[#12423c] text-[#38d4c5] border border-[#164e48] transition-colors"
+                    onClick={handleSetAllMax}
+                  >
+                    Set All Max
+                  </button>
+                  <button
+                    type="button"
+                    className="px-2.5 py-1 rounded-lg bg-[#0e3b37] hover:bg-[#12423c] text-[#a0c4c0] border border-[#164e48] transition-colors"
+                    onClick={handleResetAllZero}
+                  >
+                    Reset to 0
+                  </button>
                 </div>
               )}
             </div>
 
-            {/* Empty state or lines table */}
             {lines.length === 0 ? (
-              <div style={{
-                padding: '48px 24px',
-                textAlign: 'center',
-                border: '1.5px dashed #dbe3df',
-                borderRadius: '10px',
-                background: '#fafcfb',
-              }}>
-                <div style={{ width: '44px', height: '44px', borderRadius: '10px', background: '#eef7f2', color: '#1d684f', display: 'grid', placeItems: 'center', margin: '0 auto 12px' }}>
-                  <RotateCcw size={22} />
-                </div>
-                <h4 style={{ margin: '0 0 6px 0', fontSize: '14px', color: '#17211d' }}>
-                  {isLinked ? 'No Invoice Selected' : 'No Items Added Yet'}
-                </h4>
-                <p style={{ margin: 0, fontSize: '12px', color: '#65746d', maxWidth: '380px', marginInline: 'auto' }}>
+              <div className="p-16 text-center text-[#7aa5a0]">
+                <RotateCcw size={40} className="mx-auto mb-2 text-[#38d4c5] opacity-50" />
+                <div className="font-semibold text-white">No return items added</div>
+                <p className="text-xs mt-1">
                   {isLinked
-                    ? 'Search and select a posted sales invoice above to populate return-eligible items.'
-                    : 'Search for products in the catalog search bar above to include them in this return.'}
+                    ? 'Search and select an invoice above to view eligible items.'
+                    : 'Search and add product variants above.'}
                 </p>
               </div>
             ) : (
-              <div className="table-wrap">
-                <table className="data-table">
-                  <thead>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-[#092925]/60 text-xs font-semibold text-[#7aa5a0] uppercase border-b border-[#164e48]">
                     <tr>
-                      <th className="align-left" style={{ minWidth: '200px' }}>Product & SKU</th>
-                      {isLinked && <th className="align-center" style={{ width: '130px' }}>Sold / Ret</th>}
-                      <th className="align-center" style={{ width: '150px' }}>Return Qty</th>
-                      <th className="align-right" style={{ width: '110px' }}>Unit Refund</th>
-                      <th className="align-center" style={{ width: '160px' }}>Stock Condition</th>
-                      <th className="align-right" style={{ width: '120px' }}>Refund Total</th>
-                      <th className="align-center" style={{ width: '40px' }}></th>
+                      <th className="px-4 py-3">Product / Variant</th>
+                      {isLinked && <th className="px-4 py-3 text-center">Sold / Eligible</th>}
+                      <th className="px-4 py-3 text-center">Return Qty</th>
+                      <th className="px-4 py-3 text-right">Unit Rate</th>
+                      <th className="px-4 py-3">Restock Condition</th>
+                      <th className="px-4 py-3 text-right">Line Refund</th>
+                      <th className="px-4 py-3 text-center">Action</th>
                     </tr>
                   </thead>
-                  <tbody>
-                    {lines.map((line, idx) => {
-                      const isActive = line.return_quantity > 0
-                      return (
-                        <tr
-                          key={line.key}
-                          style={{
-                            background: isActive ? '#f8fbf9' : 'transparent',
-                            transition: 'background 0.12s',
-                          }}
-                        >
-                          <td className="align-left">
-                            <strong style={{ color: '#17211d', fontSize: '13px' }}>{line.product_name}</strong>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '2px' }}>
-                              <span style={{ fontSize: '10px', color: '#65746d' }}>SKU: {line.sku}</span>
-                              {line.cost_price > 0 && (
-                                <span style={{ fontSize: '10px', color: '#17503e', background: '#eef7f2', padding: '1px 5px', borderRadius: '3px' }}>
-                                  Cost: {money(line.cost_price)}
-                                </span>
-                              )}
-                            </div>
-                            {/* Inline optional note */}
+                  <tbody className="divide-y divide-[#113e3a]/60">
+                    {lines.map((l) => (
+                      <tr
+                        key={l.key}
+                        className={`transition-colors ${
+                          l.return_quantity > 0 ? 'bg-[#0a2f2b]/40' : 'opacity-60 hover:opacity-100'
+                        }`}
+                      >
+                        <td className="px-4 py-3.5">
+                          <div className="font-semibold text-white text-xs">
+                            {l.product_name} {l.variant_name ? `(${l.variant_name})` : ''}
+                          </div>
+                          <div className="text-[11px] text-[#527d78] font-mono">{l.sku}</div>
+                        </td>
+
+                        {isLinked && (
+                          <td className="px-4 py-3.5 text-center text-xs whitespace-nowrap">
+                            <span className="text-white font-medium">{l.sold_quantity} sold</span>
+                            <span className="text-[#38d4c5] block text-[11px]">
+                              {l.eligible_quantity} eligible
+                            </span>
+                          </td>
+                        )}
+
+                        <td className="px-4 py-3.5 text-center">
+                          <div className="inline-flex items-center gap-1.5 bg-[#031413] border border-[#164e48] rounded-xl p-1">
+                            <button
+                              type="button"
+                              className="p-1 rounded-lg text-[#a0c4c0] hover:text-white hover:bg-[#12423c] disabled:opacity-30"
+                              disabled={l.return_quantity <= 0}
+                              onClick={() => updateLineQty(l.key, -1)}
+                            >
+                              <Minus size={13} />
+                            </button>
                             <input
-                              type="text"
-                              placeholder="Defect / line remark (optional)..."
-                              value={line.remarks}
+                              type="number"
+                              min="0"
+                              max={isLinked ? l.eligible_quantity : 9999}
+                              className="w-12 bg-transparent text-center font-bold text-sm text-white focus:outline-none"
+                              value={l.return_quantity}
                               onChange={(e) => {
-                                const val = e.target.value
-                                setLines(lines.map((item, i) => (i === idx ? { ...item, remarks: val } : item)))
-                              }}
-                              style={{
-                                width: '100%',
-                                marginTop: '4px',
-                                padding: '3px 7px',
-                                fontSize: '11px',
-                                border: '1px solid #e0e6e3',
-                                borderRadius: '4px',
-                                background: '#ffffff',
+                                const val = parseInt(e.target.value) || 0
+                                const max = isLinked ? l.eligible_quantity : 9999
+                                const next = Math.max(0, Math.min(max, val))
+                                setLines(lines.map((line) => (line.key === l.key ? { ...line, return_quantity: next } : line)))
                               }}
                             />
-                          </td>
-
-                          {/* Sold / Returned Details for Linked Return */}
-                          {isLinked && (
-                            <td className="align-center">
-                              <div style={{ fontSize: '12px', fontWeight: 600, color: '#17211d' }}>
-                                {line.sold_quantity} sold
-                              </div>
-                              <div style={{ fontSize: '10px', color: '#65746d' }}>
-                                ({line.returned_quantity} returned)
-                              </div>
-                              <div style={{ fontSize: '10px', color: '#1d684f', fontWeight: 600, marginTop: '2px' }}>
-                                {line.eligible_quantity} eligible
-                              </div>
-                            </td>
-                          )}
-
-                          {/* Stepper Input */}
-                          <td className="align-center">
-                            <div className="return-stepper">
-                              <button
-                                type="button"
-                                className="return-stepper-btn"
-                                disabled={line.return_quantity <= 0}
-                                onClick={() => {
-                                  setLines(lines.map((item, i) => (i === idx ? { ...item, return_quantity: Math.max(0, item.return_quantity - 1) } : item)))
-                                }}
-                              >
-                                <Minus size={12} />
-                              </button>
-                              <input
-                                type="number"
-                                min={0}
-                                max={isLinked ? line.eligible_quantity : 9999}
-                                value={line.return_quantity}
-                                onChange={(e) => {
-                                  const val = Math.max(0, Number(e.target.value))
-                                  const capped = isLinked ? Math.min(line.eligible_quantity, val) : val
-                                  setLines(lines.map((item, i) => (i === idx ? { ...item, return_quantity: capped } : item)))
-                                }}
-                                className="return-stepper-input"
-                              />
-                              <button
-                                type="button"
-                                className="return-stepper-btn"
-                                disabled={isLinked && line.return_quantity >= line.eligible_quantity}
-                                onClick={() => {
-                                  const nextVal = line.return_quantity + 1
-                                  const capped = isLinked ? Math.min(line.eligible_quantity, nextVal) : nextVal
-                                  setLines(lines.map((item, i) => (i === idx ? { ...item, return_quantity: capped } : item)))
-                                }}
-                              >
-                                <Plus size={12} />
-                              </button>
-                              {isLinked && (
-                                <button
-                                  type="button"
-                                  className="return-stepper-max-btn"
-                                  title="Return Maximum Eligible"
-                                  onClick={() => {
-                                    setLines(lines.map((item, i) => (i === idx ? { ...item, return_quantity: line.eligible_quantity } : item)))
-                                  }}
-                                >
-                                  Max
-                                </button>
-                              )}
-                            </div>
-                          </td>
-
-                          {/* Unit Price */}
-                          <td className="align-right" style={{ fontSize: '12px', fontWeight: 500, color: '#17211d' }}>
-                            {money(line.unit_price)}
-                          </td>
-
-                          {/* Stock Condition */}
-                          <td className="align-center">
-                            <select
-                              className="text-input"
-                              style={{
-                                height: '32px',
-                                fontSize: '11px',
-                                padding: '0 8px',
-                                fontWeight: 600,
-                                borderColor:
-                                  line.restock_condition === 'good' ? '#80bca4' : line.restock_condition === 'damaged' ? '#f5b041' : '#eb5757',
-                                background:
-                                  line.restock_condition === 'good' ? '#eef7f2' : line.restock_condition === 'damaged' ? '#fffaf0' : '#fdf2f2',
-                                color:
-                                  line.restock_condition === 'good' ? '#17503e' : line.restock_condition === 'damaged' ? '#b45309' : '#b42318',
-                              }}
-                              value={line.restock_condition}
-                              onChange={(e) => {
-                                const cond = e.target.value as 'good' | 'damaged' | 'write_off'
-                                setLines(lines.map((item, i) => (i === idx ? { ...item, restock_condition: cond } : item)))
-                              }}
+                            <button
+                              type="button"
+                              className="p-1 rounded-lg text-[#a0c4c0] hover:text-white hover:bg-[#12423c] disabled:opacity-30"
+                              disabled={isLinked && l.return_quantity >= l.eligible_quantity}
+                              onClick={() => updateLineQty(l.key, 1)}
                             >
-                              <option value="good">🟢 Good (Restock)</option>
-                              <option value="damaged">🟠 Damaged Stock</option>
-                              <option value="write_off">🔴 Write-Off (Scrap)</option>
-                            </select>
-                          </td>
+                              <Plus size={13} />
+                            </button>
+                          </div>
+                        </td>
 
-                          {/* Line Total */}
-                          <td className="align-right" style={{ fontSize: '13px', fontWeight: 700, color: isActive ? '#17503e' : '#65746d' }}>
-                            {money(line.return_quantity * line.unit_price)}
-                          </td>
+                        <td className="px-4 py-3.5 text-right text-xs text-[#a0c4c0] whitespace-nowrap">
+                          {formatCurrency(l.unit_price)}
+                        </td>
 
-                          {/* Remove button */}
-                          <td className="align-center">
-                            {!isLinked ? (
-                              <button
-                                className="icon-button"
-                                style={{ width: '28px', height: '28px', color: '#b42318' }}
-                                onClick={() => setLines(lines.filter((_, i) => i !== idx))}
-                                title="Remove line"
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            ) : (
-                              <button
-                                className="icon-button"
-                                style={{ width: '28px', height: '28px', color: '#65746d' }}
-                                onClick={() => {
-                                  setLines(lines.map((item, i) => (i === idx ? { ...item, return_quantity: 0 } : item)))
-                                }}
-                                title="Zero out quantity"
-                              >
-                                <X size={14} />
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      )
-                    })}
+                        <td className="px-4 py-3.5">
+                          <select
+                            className="px-2.5 py-1.5 bg-[#031413] border border-[#164e48] rounded-xl text-xs text-white focus:outline-none focus:border-[#38d4c5]"
+                            value={l.restock_condition}
+                            onChange={(e) =>
+                              setLines(
+                                lines.map((line) =>
+                                  line.key === l.key
+                                    ? { ...line, restock_condition: e.target.value as any }
+                                    : line
+                                )
+                              )
+                            }
+                          >
+                            <option value="good">Good (Restock Shelf)</option>
+                            <option value="damaged">Damaged (Quarantine)</option>
+                            <option value="write_off">Write-Off (Scrap)</option>
+                          </select>
+                        </td>
+
+                        <td className="px-4 py-3.5 text-right font-bold text-white text-xs whitespace-nowrap">
+                          {formatCurrency(l.return_quantity * l.unit_price)}
+                        </td>
+
+                        <td className="px-4 py-3.5 text-center">
+                          <button
+                            type="button"
+                            className="p-1.5 text-[#f87171] hover:text-white hover:bg-[#3b1119] rounded-lg transition-colors"
+                            title="Remove Line"
+                            onClick={() => setLines(lines.filter((line) => line.key !== l.key))}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
@@ -993,317 +987,487 @@ export const NewSalesReturnPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Column: Settlement Summary & Action Dock */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', position: 'sticky', top: '80px' }}>
-          <div className="return-card" style={{ padding: '22px' }}>
-            <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: 700, color: '#17211d' }}>
-              Refund & Settlement
+        {/* Right Column: Return Parameters & Settlement Panel (4 Cols) */}
+        <div className="lg:col-span-4 space-y-6">
+          <div className="bg-[#061e1c]/80 p-5 rounded-2xl border border-[#164e48] shadow-2xl backdrop-blur-md space-y-4">
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2 border-b border-[#164e48] pb-3">
+              <Coins size={16} className="text-[#38d4c5]" /> Settlement & Logistics
             </h3>
 
-            {/* Glowing Big Amount Card */}
-            <div style={{
-              padding: '18px 20px',
-              background: 'linear-gradient(135deg, #0b2a21, #123c2f)',
-              color: '#ffffff',
-              borderRadius: '11px',
-              boxShadow: '0 6px 18px rgba(11, 42, 33, 0.25)',
-              marginBottom: '18px',
-            }}>
-              <div style={{ fontSize: '10px', letterSpacing: '0.12em', color: '#93cbb3', textTransform: 'uppercase', fontWeight: 750 }}>
-                Total Refund Due
-              </div>
-              <div style={{ fontSize: '28px', fontWeight: 800, color: '#5ec99a', marginTop: '4px', letterSpacing: '-0.02em' }}>
-                {money(grandTotal)}
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,0.12)', fontSize: '11px', color: '#c7dbd2' }}>
-                <span style={{ maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  👤 {selectedCustomerLabel}
-                </span>
-                <span>{activeLines.length} items · {totalUnits} units</span>
-              </div>
-            </div>
-
-            {/* Settlement Selection Cards */}
-            <div style={{ marginBottom: '16px' }}>
-              <span className="field-label" style={{ margin: '0 0 8px 0' }}>Settlement Method *</span>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <div
-                  className={`settlement-card ${settlementType === 'customer_credit' ? 'selected' : ''}`}
-                  onClick={() => setSettlementType('customer_credit')}
-                >
-                  <div style={{ width: '34px', height: '34px', borderRadius: '8px', background: settlementType === 'customer_credit' ? '#dcece5' : '#eef2f0', display: 'grid', placeItems: 'center', color: '#17503e' }}>
-                    <CreditCard size={18} />
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: '13px', fontWeight: 700, color: '#17211d' }}>Credit to Customer Account</div>
-                    <div style={{ fontSize: '11px', color: '#65746d' }}>Creates customer credit note or reduces receivable</div>
-                  </div>
-                </div>
-
-                <div
-                  className={`settlement-card ${settlementType === 'cash_refund' ? 'selected' : ''}`}
-                  onClick={() => setSettlementType('cash_refund')}
-                >
-                  <div style={{ width: '34px', height: '34px', borderRadius: '8px', background: settlementType === 'cash_refund' ? '#dcece5' : '#eef2f0', display: 'grid', placeItems: 'center', color: '#17503e' }}>
-                    <Banknote size={18} />
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: '13px', fontWeight: 700, color: '#17211d' }}>Immediate Cash Refund</div>
-                    <div style={{ fontSize: '11px', color: '#65746d' }}>Disbursed from drawer; credits Cash in Hand</div>
-                  </div>
-                </div>
-
-                <div
-                  className={`settlement-card ${settlementType === 'bank_refund' ? 'selected' : ''}`}
-                  onClick={() => setSettlementType('bank_refund')}
-                >
-                  <div style={{ width: '34px', height: '34px', borderRadius: '8px', background: settlementType === 'bank_refund' ? '#dcece5' : '#eef2f0', display: 'grid', placeItems: 'center', color: '#17503e' }}>
-                    <Building2 size={18} />
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: '13px', fontWeight: 700, color: '#17211d' }}>Bank / Card Reversal</div>
-                    <div style={{ fontSize: '11px', color: '#65746d' }}>Disbursed via electronic bank transfer</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Bank Account Selector (Only if bank_refund) */}
-            {settlementType === 'bank_refund' && (
-              <label className="form-field" style={{ marginBottom: '14px' }}>
-                <span className="field-label" style={{ margin: '0 0 5px 0' }}>Disbursing Bank Account *</span>
+            {/* Warehouse & Location */}
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-[#a0c4c0] mb-1">
+                  Destination Branch
+                </label>
                 <select
-                  className="text-input"
-                  value={bankAccountId}
-                  onChange={(e) => setBankAccountId(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#031413] border border-[#164e48] rounded-xl text-xs text-white focus:outline-none focus:border-[#38d4c5]"
+                  value={branchId}
+                  onChange={(e) => setBranchId(e.target.value)}
                 >
-                  <option value="">Select Company Bank Account</option>
-                  {bankAccounts.map((b) => (
-                    <option key={b.value} value={b.value}>{b.label}</option>
+                  {branches.map((b) => (
+                    <option key={b.value} value={b.value}>
+                      {b.label}
+                    </option>
                   ))}
                 </select>
-              </label>
-            )}
+              </div>
 
-            {/* Return Date */}
-            <label className="form-field" style={{ marginBottom: '14px' }}>
-              <span className="field-label" style={{ margin: '0 0 5px 0' }}>Return Date *</span>
-              <input
-                type="date"
-                className="text-input"
-                value={returnDate}
-                onChange={(e) => setReturnDate(e.target.value)}
-              />
-            </label>
-
-            {/* Quick Reasons Chips */}
-            <div style={{ marginBottom: '14px' }}>
-              <span className="field-label" style={{ margin: '0 0 6px 0' }}>Quick Return Reason</span>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
-                {QUICK_REASONS.map((r) => (
-                  <button
-                    key={r}
-                    type="button"
-                    className={`reason-chip ${reason === r ? 'selected' : ''}`}
-                    onClick={() => setReason(r)}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-semibold text-[#a0c4c0] mb-1">Warehouse</label>
+                  <select
+                    className="w-full px-2.5 py-2 bg-[#031413] border border-[#164e48] rounded-xl text-xs text-white focus:outline-none focus:border-[#38d4c5]"
+                    value={effectiveWarehouseId}
+                    onChange={(e) => setWarehouseId(e.target.value)}
                   >
-                    <Tag size={10} style={{ marginRight: '4px' }} />
-                    {r}
+                    {warehouses.map((w) => (
+                      <option key={w.value} value={w.value}>
+                        {w.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-[#a0c4c0] mb-1">Stock Location</label>
+                  <select
+                    className="w-full px-2.5 py-2 bg-[#031413] border border-[#164e48] rounded-xl text-xs text-white focus:outline-none focus:border-[#38d4c5]"
+                    value={effectiveLocationId}
+                    onChange={(e) => setLocationId(e.target.value)}
+                  >
+                    {locations.map((loc) => (
+                      <option key={loc.value} value={loc.value}>
+                        {loc.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[#a0c4c0] mb-1">Return Date</label>
+                <input
+                  type="date"
+                  className="w-full px-3 py-2 bg-[#031413] border border-[#164e48] rounded-xl text-xs text-white focus:outline-none focus:border-[#38d4c5]"
+                  value={returnDate}
+                  onChange={(e) => setReturnDate(e.target.value)}
+                />
+              </div>
+            </div>
+
+            {/* Settlement Method Selector */}
+            <div className="border-t border-[#164e48] pt-3 space-y-2">
+              <label className="block text-xs font-semibold text-[#a0c4c0]">Settlement Method</label>
+
+              <div className="grid grid-cols-1 gap-2">
+                {[
+                  {
+                    id: 'customer_credit',
+                    label: 'Customer Credit Note',
+                    sub: 'Credit posted to receivables balance',
+                    icon: CreditCard,
+                  },
+                  {
+                    id: 'cash_refund',
+                    label: 'Cash Refund',
+                    sub: 'Cash disbursed from current register',
+                    icon: Banknote,
+                  },
+                  {
+                    id: 'bank_refund',
+                    label: 'Bank / Card Reversal',
+                    sub: 'Transferred via bank merchant account',
+                    icon: Coins,
+                  },
+                ].map((s) => {
+                  const Icon = s.icon
+                  const active = settlementType === s.id
+                  return (
+                    <div
+                      key={s.id}
+                      className={`p-3 rounded-xl border cursor-pointer transition-all flex items-center justify-between ${
+                        active
+                          ? 'bg-[#0e3b37] border-[#38d4c5] shadow-md'
+                          : 'bg-[#031413] border-[#164e48] hover:border-[#1e615a]'
+                      }`}
+                      onClick={() => setSettlementType(s.id as any)}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <span className={`p-1.5 rounded-lg ${active ? 'bg-[#103e39] text-[#38d4c5]' : 'text-[#7aa5a0]'}`}>
+                          <Icon size={16} />
+                        </span>
+                        <div>
+                          <div className="text-xs font-bold text-white">{s.label}</div>
+                          <div className="text-[11px] text-[#527d78]">{s.sub}</div>
+                        </div>
+                      </div>
+                      <input
+                        type="radio"
+                        checked={active}
+                        onChange={() => setSettlementType(s.id as any)}
+                        className="text-[#38d4c5] focus:ring-[#38d4c5]"
+                      />
+                    </div>
+                  )
+                })}
+              </div>
+
+              {settlementType === 'bank_refund' && (
+                <div className="pt-2">
+                  <label className="block text-xs font-semibold text-[#a0c4c0] mb-1">
+                    Debit Bank Account
+                  </label>
+                  <select
+                    className="w-full px-3 py-2 bg-[#031413] border border-[#164e48] rounded-xl text-xs text-white focus:outline-none focus:border-[#38d4c5]"
+                    value={bankAccountId}
+                    onChange={(e) => setBankAccountId(e.target.value)}
+                  >
+                    <option value="">Select Bank Account...</option>
+                    {bankAccounts.map((b) => (
+                      <option key={b.value} value={b.value}>
+                        {b.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            {/* Quick Reason Chips & Reason input */}
+            <div className="border-t border-[#164e48] pt-3 space-y-2">
+              <label className="block text-xs font-semibold text-[#a0c4c0]">Return Reason</label>
+              <div className="flex flex-wrap gap-1.5">
+                {QUICK_REASONS.map((qr) => (
+                  <button
+                    key={qr}
+                    type="button"
+                    className={`px-2 py-1 rounded-lg text-[11px] font-medium transition-colors ${
+                      reason === qr
+                        ? 'bg-[#103e39] text-[#38d4c5] border border-[#38d4c5]'
+                        : 'bg-[#031413] text-[#7aa5a0] border border-[#164e48] hover:text-white'
+                    }`}
+                    onClick={() => setReason(qr)}
+                  >
+                    {qr}
                   </button>
                 ))}
               </div>
               <input
                 type="text"
-                className="text-input"
+                className="w-full px-3 py-2 bg-[#031413] border border-[#164e48] rounded-xl text-xs text-white placeholder-[#527d78] focus:outline-none focus:border-[#38d4c5]"
+                placeholder="Specific return reason or defect note..."
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
-                placeholder="Or type custom reason..."
               />
             </div>
 
-            {/* Notes */}
-            <label className="form-field" style={{ marginBottom: '20px' }}>
-              <span className="field-label" style={{ margin: '0 0 5px 0' }}>Internal Audit Notes (Optional)</span>
+            <div>
+              <label className="block text-xs font-semibold text-[#a0c4c0] mb-1">Internal Notes</label>
               <textarea
-                className="text-input"
-                style={{ minHeight: '60px', padding: '8px 11px', resize: 'vertical' }}
                 rows={2}
+                className="w-full px-3 py-2 bg-[#031413] border border-[#164e48] rounded-xl text-xs text-white placeholder-[#527d78] focus:outline-none focus:border-[#38d4c5]"
+                placeholder="Optional audit trail note..."
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                placeholder="Remarks about customer return condition, invoice verification..."
               />
-            </label>
+            </div>
+
+            {/* Financial Summary Box */}
+            <div className="p-4 rounded-xl bg-[#031413] border border-[#164e48] space-y-2 text-xs">
+              <div className="flex justify-between text-[#a0c4c0]">
+                <span>Items Selected:</span>
+                <span className="text-white font-semibold">{activeLines.length}</span>
+              </div>
+              <div className="flex justify-between text-[#a0c4c0]">
+                <span>Total Units:</span>
+                <span className="text-white font-semibold">{totalUnits} PCS</span>
+              </div>
+              <div className="flex justify-between text-base font-bold text-white pt-2 border-t border-[#164e48]">
+                <span>Total Refund:</span>
+                <span className="text-[#f87171]">{formatCurrency(grandTotal)}</span>
+              </div>
+            </div>
 
             {/* Action Buttons */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div className="pt-2 space-y-2">
               <button
                 type="button"
-                className="button primary"
-                style={{
-                  height: '46px',
-                  fontSize: '14px',
-                  fontWeight: 700,
-                  boxShadow: '0 4px 14px rgba(29, 104, 79, 0.35)',
-                }}
-                disabled={saveMutation.isPending || grandTotal <= 0}
+                className="w-full py-3 bg-gradient-to-r from-[#10b981] to-[#059669] hover:from-[#059669] hover:to-[#047857] text-white rounded-xl text-sm font-bold shadow-lg shadow-[#059669]/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                disabled={saveMutation.isPending || activeLines.length === 0}
                 onClick={() => saveMutation.mutate(true)}
               >
                 {saveMutation.isPending ? (
                   <>
-                    <span className="spinner" style={{ width: '16px', height: '16px' }} />
-                    Processing Return & Ledger...
+                    <RefreshCw className="animate-spin" size={16} /> Processing Return...
                   </>
                 ) : (
                   <>
-                    <CheckCircle2 size={18} />
-                    Post Return & Settle ({money(grandTotal)})
+                    <CheckCircle2 size={16} /> Post Return & Restock Now
                   </>
                 )}
               </button>
 
               <button
                 type="button"
-                className="button secondary"
-                style={{ height: '38px', fontSize: '13px' }}
-                disabled={saveMutation.isPending || grandTotal <= 0}
+                className="w-full py-2.5 bg-[#0c2e2a] hover:bg-[#12423c] border border-[#164e48] text-[#a0c4c0] hover:text-white rounded-xl text-xs font-semibold transition-colors disabled:opacity-50"
+                disabled={saveMutation.isPending || activeLines.length === 0}
                 onClick={() => saveMutation.mutate(false)}
               >
-                <FileCheck size={16} /> Save Return as Draft
+                Save as Draft Return
               </button>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Post-Completion & Thermal Slip Modal */}
+      {/* ── MODAL: Completed Return Confirmation & Dual Print Voucher ────────── */}
       {completedReturn && (
-        <dialog
-          open
-          className="confirm-dialog"
-          style={{
-            maxWidth: '560px',
-            padding: '24px',
-            border: 'none',
-            borderRadius: '14px',
-            boxShadow: '0 24px 60px rgba(0,0,0,0.3)',
-          }}
-        >
-          <div style={{ textAlign: 'center', marginBottom: '20px' }}>
-            <div style={{
-              width: '54px',
-              height: '54px',
-              borderRadius: '50%',
-              background: '#e3f5ea',
-              color: '#17603f',
-              display: 'grid',
-              placeItems: 'center',
-              margin: '0 auto 12px',
-            }}>
-              <CheckCircle2 size={32} />
-            </div>
-            <h2 style={{ margin: 0, fontSize: '20px', color: '#17211d' }}>
-              Sales Return {completedReturn.posted ? 'POSTED' : 'SAVED AS DRAFT'}!
-            </h2>
-            <div style={{ fontSize: '13px', color: '#65746d', marginTop: '4px' }}>
-              Document Ref: <strong style={{ color: '#17503e' }}>{completedReturn.document_number}</strong>
-            </div>
-          </div>
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="bg-[#082321] rounded-2xl shadow-2xl border border-[#164e48] max-w-2xl w-full max-h-[92vh] overflow-hidden text-white flex flex-col animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="p-5 border-b border-[#164e48] bg-[#0c2e2a] flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-[#092920] border border-[#059669] text-[#34d399] flex items-center justify-center">
+                  <CheckCircle2 size={22} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <span>Sales Return #{completedReturn.document_number}</span>
+                    <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-[#092920] text-[#34d399] border border-[#059669]/40">
+                      {completedReturn.posted ? 'Posted & Restocked' : 'Draft Saved'}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-[#7aa5a0]">
+                    Customer: {completedReturn.customer_name} • Refund: {formatCurrency(completedReturn.total_amount)}
+                  </p>
+                </div>
+              </div>
 
-          {/* Thermal Slip Preview Container */}
-          <div style={{
-            background: '#ffffff',
-            border: '1px solid #dbe3df',
-            borderRadius: '8px',
-            padding: '16px',
-            fontSize: '12px',
-            fontFamily: 'monospace',
-            color: '#17211d',
-            marginBottom: '20px',
-            maxHeight: '260px',
-            overflowY: 'auto',
-          }}>
-            <div className="return-slip-print" style={{ textAlign: 'center' }}>
-              <div style={{ fontWeight: 800, fontSize: '15px' }}>BABY BLOOM</div>
-              <div style={{ fontSize: '11px' }}>{selectedBranchName}</div>
-              <div style={{ margin: '6px 0', borderBottom: '1px dashed #000', paddingBottom: '4px', fontWeight: 700 }}>
-                SALES RETURN CREDIT SLIP
+              {/* Format Toggle */}
+              <div className="inline-flex rounded-xl p-1 bg-[#031413] border border-[#164e48]">
+                <button
+                  type="button"
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    printFormat === 'thermal'
+                      ? 'bg-[#103e39] text-[#38d4c5] shadow-sm'
+                      : 'text-[#7aa5a0] hover:text-white'
+                  }`}
+                  onClick={() => setPrintFormat('thermal')}
+                >
+                  80mm Thermal
+                </button>
+                <button
+                  type="button"
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    printFormat === 'a4'
+                      ? 'bg-[#103e39] text-[#38d4c5] shadow-sm'
+                      : 'text-[#7aa5a0] hover:text-white'
+                  }`}
+                  onClick={() => setPrintFormat('a4')}
+                >
+                  A4 Credit Note
+                </button>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', textAlign: 'left' }}>
-                <span>Return #: {completedReturn.document_number}</span>
-                <span>Date: {completedReturn.date}</span>
-              </div>
-              {completedReturn.invoice_number && (
-                <div style={{ fontSize: '11px', textAlign: 'left' }}>
-                  Inv Ref: {completedReturn.invoice_number}
+            </div>
+
+            {/* Preview Body */}
+            <div className="p-6 overflow-y-auto max-h-[62vh] space-y-4 bg-[#031413]">
+              {printFormat === 'thermal' && thermalData ? (
+                <div className="flex justify-center bg-[#061e1c] p-4 rounded-xl border border-[#164e48]">
+                  <ThermalReceiptDocket receipt={thermalData} />
+                </div>
+              ) : (
+                /* ── A4 Commercial Credit Note Voucher ── */
+                <div
+                  id="sales-return-voucher-printable"
+                  className="bg-white text-black p-8 rounded-xl shadow-lg border border-gray-300 font-sans text-xs"
+                >
+                  {/* Letterhead */}
+                  <div className="flex justify-between items-start border-b-2 border-emerald-800 pb-4 mb-4">
+                    <div>
+                      <div className="text-xl font-black tracking-wider text-emerald-900 uppercase">
+                        BABY BLOOM PVT LTD
+                      </div>
+                      <div className="text-[11px] text-gray-600 mt-0.5">
+                        Premier Baby & Maternity Retail Specialists
+                      </div>
+                      <div className="text-[10px] text-gray-500 mt-0.5">
+                        No. 124, Galle Road, Colombo 03, Sri Lanka | Tel: +94 11 234 5678
+                      </div>
+                      <div className="text-[10px] text-gray-500 font-mono">
+                        VAT/TIN: 104829104-7000 | Co. Reg: PV-98421
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="inline-block px-3 py-1 bg-emerald-100 text-emerald-900 font-bold text-xs uppercase tracking-widest rounded border border-emerald-300">
+                        CREDIT NOTE / RETURN
+                      </div>
+                      <div className="text-sm font-black text-gray-900 mt-1.5 font-mono">
+                        #{completedReturn.document_number}
+                      </div>
+                      <div className="text-[11px] text-gray-500">
+                        Date: {new Date(completedReturn.date).toLocaleDateString()}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Metadata Grid */}
+                  <div className="grid grid-cols-2 gap-4 bg-gray-50 p-3 rounded-lg border border-gray-200 mb-4 text-[11px]">
+                    <div>
+                      <div className="text-gray-500 uppercase text-[9px] font-bold">Customer Information</div>
+                      <div className="font-bold text-gray-900 text-xs mt-0.5">{completedReturn.customer_name}</div>
+                      <div className="text-gray-600 font-mono text-[10px]">
+                        Code: {completedReturn.customer_code || 'CUST'} | Phone: {completedReturn.customer_phone || 'N/A'}
+                      </div>
+                      {completedReturn.invoice_number && (
+                        <div className="text-emerald-700 font-bold mt-1 text-[10px]">
+                          Original Invoice Ref: #{completedReturn.invoice_number}
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      <div className="text-gray-500 uppercase text-[9px] font-bold">Logistics & Restock Hub</div>
+                      <div className="font-semibold text-gray-800 text-[11px] mt-0.5">
+                        {completedReturn.branch_name || 'Colombo Store'}
+                      </div>
+                      <div className="text-gray-600 text-[10px]">
+                        {completedReturn.warehouse_name || 'Warehouse'} • {completedReturn.location_name || 'Floor'}
+                      </div>
+                      <div className="text-gray-700 font-medium text-[10px] mt-1">
+                        Settlement: <span className="font-bold text-emerald-800">{settlementLabel(completedReturn.settlement_type)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Items Table */}
+                  <div className="border border-gray-200 rounded-lg overflow-hidden mb-4">
+                    <table className="w-full text-left border-collapse text-[11px]">
+                      <thead className="bg-gray-100 text-gray-700 uppercase font-bold text-[10px] border-b border-gray-200">
+                        <tr>
+                          <th className="p-2 w-8 text-center">#</th>
+                          <th className="p-2">Description</th>
+                          <th className="p-2 text-center">Condition</th>
+                          <th className="p-2 text-right">Unit Rate</th>
+                          <th className="p-2 text-center">Qty Returned</th>
+                          <th className="p-2 text-right">Refund Total</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {completedReturn.items.map((it, idx) => (
+                          <tr key={idx} className="hover:bg-gray-50">
+                            <td className="p-2 text-center font-mono text-gray-400">{idx + 1}</td>
+                            <td className="p-2">
+                              <div className="font-bold text-gray-900">{it.name}</div>
+                              {it.variant && <div className="text-[10px] text-gray-500">{it.variant}</div>}
+                              {it.sku && <div className="text-[9px] font-mono text-gray-400">{it.sku}</div>}
+                            </td>
+                            <td className="p-2 text-center">
+                              <span className="capitalize px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-100 text-gray-800 border border-gray-200">
+                                {it.condition}
+                              </span>
+                            </td>
+                            <td className="p-2 text-right font-mono text-gray-700">
+                              {formatCurrency(it.unit_price)}
+                            </td>
+                            <td className="p-2 text-center font-bold text-gray-900">
+                              {it.quantity} PCS
+                            </td>
+                            <td className="p-2 text-right font-bold text-gray-900 font-mono">
+                              {formatCurrency(it.quantity * it.unit_price)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Summary Box & Reason */}
+                  <div className="grid grid-cols-2 gap-4 items-start mb-6">
+                    <div className="bg-gray-50 p-3 rounded-lg border border-gray-200 text-[10px] space-y-1">
+                      <div className="font-bold text-gray-700 uppercase text-[9px]">Return Authorization Note</div>
+                      <div className="text-gray-800">
+                        <span className="font-semibold">Reason:</span> {completedReturn.reason}
+                      </div>
+                      {completedReturn.notes && (
+                        <div className="text-gray-600">
+                          <span className="font-semibold">Notes:</span> {completedReturn.notes}
+                        </div>
+                      )}
+                      <div className="text-gray-500 pt-1 text-[9px]">
+                        Returned items verified and re-entered into inventory stock register.
+                      </div>
+                    </div>
+
+                    <div className="bg-emerald-50 p-3 rounded-lg border border-emerald-200 text-right space-y-1.5">
+                      <div className="flex justify-between text-gray-600 text-[11px]">
+                        <span>Total Items Returned:</span>
+                        <span className="font-bold text-gray-900">{completedReturn.items.length} lines</span>
+                      </div>
+                      <div className="flex justify-between text-gray-600 text-[11px]">
+                        <span>Total Units Restocked:</span>
+                        <span className="font-bold text-gray-900">
+                          {completedReturn.items.reduce((s, it) => s + it.quantity, 0)} PCS
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-sm font-black text-emerald-950 pt-2 border-t border-emerald-200">
+                        <span>Total Credit / Refund:</span>
+                        <span className="font-mono">{formatCurrency(completedReturn.total_amount)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Signatures */}
+                  <div className="grid grid-cols-2 gap-12 pt-6 border-t border-gray-200 text-[10px] text-gray-600">
+                    <div>
+                      <div className="h-10 border-b border-gray-300 border-dashed"></div>
+                      <div className="mt-1 font-semibold text-gray-800">Customer Signature / Acknowledgment</div>
+                      <div className="text-[9px] text-gray-400">Received refund / credit memo voucher</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="h-10 border-b border-gray-300 border-dashed"></div>
+                      <div className="mt-1 font-semibold text-gray-800">Authorized Officer / Branch Manager</div>
+                      <div className="text-[9px] text-gray-400">Baby Bloom (Pvt) Ltd Restock Control</div>
+                    </div>
+                  </div>
                 </div>
               )}
-              <div style={{ fontSize: '11px', textAlign: 'left', marginBottom: '8px' }}>
-                Customer: {completedReturn.customer_name}
-              </div>
+            </div>
 
-              <div style={{ borderTop: '1px dashed #000', borderBottom: '1px dashed #000', padding: '4px 0', margin: '6px 0' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700 }}>
-                  <span>ITEM</span>
-                  <span>QTY x RATE</span>
-                  <span>TOTAL</span>
-                </div>
-                {completedReturn.items.map((it, i) => (
-                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', margin: '3px 0' }}>
-                    <span style={{ textAlign: 'left', maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {it.name}
-                    </span>
-                    <span>{it.quantity} x {Number(it.unit_price).toFixed(2)}</span>
-                    <span>{Number(it.quantity * it.unit_price).toFixed(2)}</span>
-                  </div>
-                ))}
-              </div>
+            {/* Modal Actions */}
+            <div className="p-4 border-t border-[#164e48] bg-[#0c2e2a] flex items-center justify-between gap-3">
+              <button
+                type="button"
+                className="px-4 py-2 text-xs font-bold rounded-xl bg-gradient-to-r from-[#10b981] to-[#059669] hover:from-[#059669] hover:to-[#047857] text-white flex items-center gap-2 shadow-md shadow-[#059669]/20 transition-all active:scale-[0.98]"
+                onClick={() => window.print()}
+              >
+                <Printer size={15} /> Print {printFormat === 'thermal' ? 'Thermal Receipt' : 'A4 Voucher'}
+              </button>
 
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 800, fontSize: '13px', margin: '8px 0 4px' }}>
-                <span>TOTAL REFUND:</span>
-                <span>{money(completedReturn.total_amount)}</span>
-              </div>
-              <div style={{ fontSize: '11px', textAlign: 'left' }}>
-                Settlement: {settlementName(completedReturn.settlement_type)}
-              </div>
-              <div style={{ marginTop: '12px', fontSize: '10px', textAlign: 'center', color: '#555' }}>
-                * Goods verified and restocked *<br />
-                Thank you for your business
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="px-3.5 py-2 text-xs font-semibold rounded-xl bg-[#0e3b37] hover:bg-[#12423c] text-[#38d4c5] border border-[#164e48] transition-colors"
+                  onClick={() => {
+                    setCompletedReturn(null)
+                    setSelectedInvoice(null)
+                    setLines([])
+                  }}
+                >
+                  Process Another Return
+                </button>
+
+                <button
+                  type="button"
+                  className="px-4 py-2 text-xs font-semibold rounded-xl bg-[#082321] hover:bg-[#12423c] border border-[#164e48] text-white transition-colors"
+                  onClick={() => navigate('/sales/returns')}
+                >
+                  View Returns Register
+                </button>
               </div>
             </div>
           </div>
-
-          <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              className="button primary"
-              style={{ flex: 1, minHeight: '40px', gap: '6px' }}
-              onClick={() => window.print()}
-            >
-              <Printer size={16} /> Print Return Slip
-            </button>
-            <button
-              type="button"
-              className="button secondary"
-              style={{ minHeight: '40px' }}
-              onClick={() => {
-                setCompletedReturn(null)
-                setSelectedInvoice(null)
-                setLines([])
-                setInvoiceSearch('')
-              }}
-            >
-              New Return
-            </button>
-            <button
-              type="button"
-              className="button secondary"
-              style={{ minHeight: '40px' }}
-              onClick={() => navigate('/sales/returns')}
-            >
-              Done &rarr;
-            </button>
-          </div>
-        </dialog>
+        </div>
       )}
     </div>
   )

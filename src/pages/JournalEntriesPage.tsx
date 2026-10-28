@@ -16,6 +16,7 @@ import {
   ExternalLink,
 } from 'lucide-react'
 import { listLookup } from '../services/masterData'
+import { getErrorMessage } from '../lib/errors'
 import {
   fetchJournalEntries,
   createJournalEntry,
@@ -118,7 +119,7 @@ export const JournalEntriesPage: React.FC = () => {
       resetJournalForm()
     },
     onError: (err: Error) => {
-      setErrorNotice(err.message || 'Failed to create journal entry')
+      setErrorNotice(getErrorMessage(err, 'Failed to create journal entry'))
     },
   })
 
@@ -140,6 +141,9 @@ export const JournalEntriesPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['adjustment-notes-list'] })
       setShowNoteModal(false)
       resetNoteForm()
+    },
+    onError: (err: Error) => {
+      setErrorNotice(getErrorMessage(err, 'Failed to create adjustment note'))
     },
   })
 
@@ -703,20 +707,26 @@ export const JournalEntriesPage: React.FC = () => {
                 Cancel
               </button>
               <button
-                onClick={() =>
+                onClick={() => {
+                  const targetBranch = branchId || branches[0]?.value || 'branch-colombo'
                   createJournalMutation.mutate({
-                    branch_id: branchId || branches[0]?.value || '00000000-0000-0000-0000-000000000000',
+                    branch_id: targetBranch,
                     entry_date: entryDate,
                     description: journalDescription,
                     lines: lines.map((l) => ({
                       account_id: l.account_id,
                       description: l.description,
-                      debit: l.debit,
-                      credit: l.credit,
+                      debit: Number(l.debit) || 0,
+                      credit: Number(l.credit) || 0,
                     })),
                   })
+                }}
+                disabled={
+                  createJournalMutation.isPending ||
+                  !isBalanced ||
+                  !journalDescription ||
+                  lines.some((l) => !l.account_id)
                 }
-                disabled={createJournalMutation.isPending || !isBalanced || !journalDescription}
                 className="px-4 py-2 bg-[#00b4d8] hover:bg-[#0096c7] text-[#031413] rounded-lg text-xs font-bold disabled:opacity-50 transition-colors shadow-md shadow-[#00b4d8]/20"
               >
                 Save Draft Journal

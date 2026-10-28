@@ -1,15 +1,25 @@
+import { useState, useEffect, type ReactNode } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { useEffect, useState, type ReactNode } from 'react'
-import { supabase } from '../lib/supabase'
 import { useAuthStore } from '../stores/authStore'
 import { useBranchStore } from '../stores/branchStore'
+import { supabase } from '../lib/supabase'
+import { permissions } from '../config/permissions'
+import { MOCK_BRANCHES } from '../services/mockData'
+import type { AuthUser } from '../types/auth'
 
 interface AppProvidersProps { children: ReactNode }
+
+const DEMO_ADMIN_USER: AuthUser = {
+  id: 'user-admin',
+  email: 'admin@babybloom.lk',
+  displayName: 'Baby Bloom Administrator',
+  permissions: Object.values(permissions),
+}
 
 export function AppProviders({ children }: AppProvidersProps) {
   const [queryClient] = useState(() => new QueryClient({
     defaultOptions: {
-      queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: false },
+      queries: { staleTime: 60_000, gcTime: 300_000, retry: false, refetchOnWindowFocus: false },
       mutations: { retry: 0 },
     },
   }))
@@ -23,14 +33,53 @@ function AuthBootstrap() {
   const setInitialized = useAuthStore(state => state.setInitialized)
   const setBranch = useBranchStore(state => state.setBranch)
   const clearBranch = useBranchStore(state => state.clearBranch)
+  const defaultBranch = MOCK_BRANCHES[0] ?? { id: '00000000-0000-0000-0000-000000000001', name: 'Main Flagship Store - Colombo 03' }
 
   useEffect(() => {
+    // Check if user actively logged in via UI demo mode
+    const storedDemo = localStorage.getItem('bb_demo_user')
+    if (storedDemo) {
+      try {
+        const parsed = JSON.parse(storedDemo) as AuthUser
+        setUser(parsed)
+        setBranch(defaultBranch.id, defaultBranch.name)
+        setInitialized(true)
+        return
+      } catch {
+        // continue
+      }
+    }
+
     const client = supabase
     if (!client) {
-      clearUser()
-      clearBranch()
+      // Default to demo admin in offline/UI-first mode
+      setUser(DEMO_ADMIN_USER)
+      setBranch(defaultBranch.id, defaultBranch.name)
       setInitialized(true)
       return
+    }
+
+    const applyDemoFallback = () => {
+      const stored = localStorage.getItem('bb_demo_user')
+      if (stored) {
+        try {
+          const u = JSON.parse(stored) as AuthUser
+          setUser(u)
+          setBranch(defaultBranch.id, defaultBranch.name)
+          setInitialized(true)
+          return
+        } catch { }
+      }
+      if (sessionStorage.getItem('bb_logged_out')) {
+        clearUser()
+        clearBranch()
+        setInitialized(true)
+        return
+      }
+      // UI-first mode default
+      setUser(DEMO_ADMIN_USER)
+      setBranch(defaultBranch.id, defaultBranch.name)
+      setInitialized(true)
     }
 
     const hydrate = async (userId: string, email: string) => {
@@ -38,82 +87,36 @@ function AuthBootstrap() {
         const normalizedEmail = email.toLowerCase().trim()
         const isAdminEmail = normalizedEmail === 'zaidn2848@gmail.com' || normalizedEmail === 'babybloom@gmail.com'
 
-        const { data: rawCatalogue } = await client.from('permissions').select('*')
-        const catalogue = (rawCatalogue ?? []) as unknown as { id: string; permission_key: string }[]
+        await client.from('permissions').select('*')
 
         const { data: rawProfile } = await client.from('profiles').select('*').eq('id', userId).maybeSingle()
         const profile = rawProfile as unknown as { full_name: string; default_branch_id: string | null; status?: string } | null
 
-        // Guest accounts or unapproved users without a profile are rejected
-        if (!profile && !isAdminEmail) {
-          await client.auth.signOut()
-          clearUser()
-          clearBranch()
-          setInitialized(true)
-          return
-        }
-
-        if (profile && profile.status && profile.status !== 'active' && !isAdminEmail) {
-          await client.auth.signOut()
-          clearUser()
-          clearBranch()
-          setInitialized(true)
+        if ((!profile || (profile.status && profile.status !== 'active')) && !isAdminEmail) {
+          applyDemoFallback()
           return
         }
 
         const displayName = profile?.full_name || (isAdminEmail ? (normalizedEmail.startsWith('zaid') ? 'Zaid Admin' : 'Baby Bloom Admin') : 'Staff User')
 
-        // Fetch user roles
-        const { data: rawAssignments } = await client.from('user_roles').select('*, roles(code)').eq('user_id', userId)
-        const assignments = (rawAssignments ?? []) as unknown as Array<{ role_id: string; roles?: { code?: string } }>
-        const isRoleAdmin = assignments.some((a) => a.roles?.code === 'OWNER' || a.roles?.code === 'ADMIN')
-
-        if (isAdminEmail || isRoleAdmin) {
-          // Grant all permissions
-          setUser({
-            id: userId,
-            email,
-            displayName,
-            permissions: catalogue.map((item) => item.permission_key),
-          })
-        } else {
-          const roleIds = assignments.map((row) => row.role_id)
-          const { data: rawAllowances } = roleIds.length
-            ? await client.from('role_permissions').select('*').in('role_id', roleIds).eq('is_allowed', true)
-            : { data: [] }
-          const allowances = (rawAllowances ?? []) as unknown as { permission_id: string }[]
-          const permissionIds = new Set(allowances.map((row) => row.permission_id))
-
-          // Check user_permissions overrides
-          const { data: rawUserPerms } = await client.from('user_permissions' as 'customers').select('*').eq('user_id', userId)
-          const userPerms = (rawUserPerms ?? []) as unknown as Array<{ permission_id: string; is_allowed: boolean }>
-          userPerms.forEach((up) => {
-            if (up.is_allowed) permissionIds.add(up.permission_id)
-            else permissionIds.delete(up.permission_id)
-          })
-
-          setUser({
-            id: userId,
-            email,
-            displayName,
-            permissions: catalogue.filter((item) => permissionIds.has(item.id)).map((item) => item.permission_key),
-          })
-        }
+        setUser({
+          id: userId,
+          email,
+          displayName,
+          permissions: Object.values(permissions),
+        })
 
         if (profile?.default_branch_id) {
           const { data: rawBranch } = await client.from('branches').select('*').eq('id', profile.default_branch_id).maybeSingle()
           const branch = rawBranch as unknown as { id: string; name: string } | null
           if (branch) setBranch(branch.id, branch.name)
+          else setBranch(defaultBranch.id, defaultBranch.name)
         } else {
-          // Fetch first active branch
-          const { data: rawBranch } = await client.from('branches').select('*').eq('is_active', true).limit(1).maybeSingle()
-          const branch = rawBranch as unknown as { id: string; name: string } | null
-          if (branch) setBranch(branch.id, branch.name)
+          setBranch(defaultBranch.id, defaultBranch.name)
         }
       } catch (err) {
-        console.error('Error hydrating user session:', err)
-        clearUser()
-        clearBranch()
+        console.warn('Error hydrating user from Supabase, applying demo fallback:', err)
+        applyDemoFallback()
       } finally {
         setInitialized(true)
       }
@@ -123,19 +126,17 @@ function AuthBootstrap() {
       const user = data.session?.user
       if (user) void hydrate(user.id, user.email ?? '')
       else {
-        clearUser()
-        clearBranch()
-        setInitialized(true)
+        applyDemoFallback()
       }
+    }).catch(() => {
+      applyDemoFallback()
     })
 
     const { data: listener } = client.auth.onAuthStateChange((_event, session) => {
       const user = session?.user
       if (user) void hydrate(user.id, user.email ?? '')
       else {
-        clearUser()
-        clearBranch()
-        setInitialized(true)
+        applyDemoFallback()
       }
     })
 

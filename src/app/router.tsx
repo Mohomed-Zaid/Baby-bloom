@@ -8,7 +8,6 @@ import { NotFoundPage } from '../pages/NotFoundPage'
 import { PlaceholderPage } from '../pages/PlaceholderPage'
 import { MasterDataPage } from '../pages/MasterDataPage'
 import { ProductsPage } from '../pages/ProductsPage'
-import { InventoryDocumentsPage } from '../pages/InventoryDocumentsPage'
 import { CurrentStockPage } from '../pages/CurrentStockPage'
 import { StockMovementPage } from '../pages/StockMovementPage'
 import { PurchaseEntryPage } from '../pages/PurchaseEntryPage'
@@ -25,6 +24,8 @@ import { FinancialReportsPage } from '../pages/FinancialReportsPage'
 import { BarcodeGeneratorPage } from '../pages/BarcodeGeneratorPage'
 import { ShortcutKeysPage } from '../pages/ShortcutKeysPage'
 import { PriceCheckPage } from '../pages/PriceCheckPage'
+import { BackupAndRestorePage } from '../pages/BackupAndRestorePage'
+import { SystemSettingsPage } from '../pages/SystemSettingsPage'
 import { PosShiftPage } from '../pages/PosShiftPage'
 import { PettyCashPage } from '../pages/PettyCashPage'
 import { AuditTrailPage } from '../pages/AuditTrailPage'
@@ -51,10 +52,19 @@ import { BankingPage } from '../pages/BankingPage'
 import { NumberSequencesPage } from '../pages/NumberSequencesPage'
 import { GeneralLedgerPage } from '../pages/GeneralLedgerPage'
 import { AdjustmentNotesPage } from '../pages/AdjustmentNotesPage'
+import { RefundsPage } from '../pages/RefundsPage'
+import { OpeningStockPage } from '../pages/OpeningStockPage'
+import { StockTransferPage } from '../pages/StockTransferPage'
+import { StockAdjustmentPage } from '../pages/StockAdjustmentPage'
+import { DamagedStockPage } from '../pages/DamagedStockPage'
+import { StockWriteOffPage } from '../pages/StockWriteOffPage'
+import { CustomerBalancesPage } from '../pages/CustomerBalancesPage'
 
 const masterPages: ReadonlyArray<readonly [string, string]> = []
 
 const implementedPrefixes = [
+  '/customers/balances','/customers/statement','/finance/customer-balances',
+  '/suppliers/balances','/suppliers/statement','/finance/supplier-balances',
   '/number-sequences',
   '/chart-of-accounts','/account-mappings',
   '/banks','/bank-branches','/bank-accounts','/create/bank-account',
@@ -68,7 +78,7 @@ const implementedPrefixes = [
   '/inventory/products','/inventory/current-stock','/inventory/opening-stock','/inventory/stock-transfer',
   '/inventory/stock-adjustment','/inventory/damaged-stock','/inventory/stock-write-off',
   '/inventory/low-stock','/inventory/stock-movement','/inventory/valuation','/inventory/generate-barcode',
-  '/sales/pos','/sales/new-create','/sales/invoices','/sales/held','/sales/returns','/sales/new-return',
+  '/sales/pos','/sales/new-create','/sales/invoices','/sales/held','/sales/returns','/sales/new-return','/sales/refunds','/invoice/refunds',
   '/sales/orders','/sales/new-order',
   '/admin/staff','/create/staff',
   '/inventory/customer-orders','/inventory/order-delivery','/inventory/transfers/in-transit',
@@ -84,6 +94,7 @@ const implementedPrefixes = [
   '/finance/journal-entry','/finance/cheque-administration','/finance/credit-and-debit-note',
   '/reports/finance-reports','/reports/accounting-reports',
   '/extras/shortcut-keys','/extras/price-check','/extras/barcode-labels','/extras/price-change',
+  '/extras/backup-and-restore','/extras/system-settings',
   ...masterPages.map(([path]) => `/${path}`),
 ]
 
@@ -96,9 +107,13 @@ export const router = createBrowserRouter([
       { index: true, element: <Navigate to="/dashboard" replace /> },
       { path: 'dashboard', element: <DashboardPage /> },
       { path: 'customers', element: <CustomersPage /> },
+      { path: 'customers/balances', element: <CustomerBalancesPage mode="balances" /> },
+      { path: 'customers/statement', element: <CustomerBalancesPage mode="statement" /> },
+      { path: 'finance/customer-balances', element: <CustomerBalancesPage mode="balances" /> },
       { path: 'vendors/:id?', element: <VendorsPage /> },
       { path: 'create/vendor', element: <VendorsPage /> },
       { path: 'products/:id?', element: <ProductsPage /> },
+      { path: 'product-details/:id?', element: <ProductsPage /> },
       { path: 'product-barcodes', element: <ProductBarcodesPage /> },
       { path: 'categories/:id?', element: <CategoriesPage /> },
       { path: 'create/category', element: <CategoriesPage /> },
@@ -107,22 +122,72 @@ export const router = createBrowserRouter([
       { path: 'warehouses/:id?', element: <WarehousesPage /> },
       { path: 'create/warehouse', element: <WarehousesPage /> },
       { path: 'stock-locations/:id?', element: <StockLocationsPage /> },
+      { path: 'stock-location-details/:id?', element: <StockLocationsPage /> },
       { path: 'create/stock-location', element: <StockLocationsPage /> },
       { path: 'inventory/stock-locations', element: <StockLocationsPage /> },
-      { path: 'inventory/products', element: <ProductsPage /> },
+      { path: 'inventory/stock-location-details', element: <StockLocationsPage /> },
+      { path: 'inventory/products/:id?', element: <ProductsPage /> },
+       { path: 'inventory/product-details/:id?', element: <ProductsPage /> },
       { path: 'inventory/current-stock', element: <CurrentStockPage /> },
-      { path: 'inventory/opening-stock', element: <InventoryDocumentsPage kind="opening_stock" /> },
+      { path: 'inventory/current-stock-details', element: <CurrentStockPage /> },
+      { path: 'current-stock', element: <CurrentStockPage /> },
+      { path: 'current-stock-details', element: <CurrentStockPage /> },
+      { path: 'inventory/opening-stock', element: <OpeningStockPage /> },
+      { path: 'inventory/opening-stock-batch-valuation', element: <OpeningStockPage /> },
+      { path: 'inventory/opening-stock-valuation', element: <OpeningStockPage /> },
+      { path: 'opening-stock', element: <OpeningStockPage /> },
+      { path: 'opening-stock-batch-valuation', element: <OpeningStockPage /> },
       { path: 'inventory/beginning-stock', element: <Navigate to="/inventory/opening-stock" replace /> },
-      { path: 'inventory/stock-transfer', element: <InventoryDocumentsPage kind="stock_transfer" /> },
+      { path: 'inventory/stock-transfer', element: <StockTransferPage /> },
+      { path: 'inventory/stock-transfer-movement', element: <StockTransferPage /> },
+      { path: 'inventory/inter-location-movement', element: <StockTransferPage /> },
+      { path: 'stock-transfer', element: <StockTransferPage /> },
+      { path: 'stock-transfer-movement', element: <StockTransferPage /> },
+      { path: 'inter-location-movement', element: <StockTransferPage /> },
       { path: 'inventory/transfers/in-transit', element: <InTransitTransfersPage /> },
+      { path: 'inventory/in-transit-transfers', element: <InTransitTransfersPage /> },
+      { path: 'inventory/inter-branch-transfers', element: <InTransitTransfersPage /> },
+      { path: 'inventory/in-transit', element: <InTransitTransfersPage /> },
+      { path: 'in-transit-transfers', element: <InTransitTransfersPage /> },
+      { path: 'inter-branch-in-transit', element: <InTransitTransfersPage /> },
+      { path: 'in-transit', element: <InTransitTransfersPage /> },
       { path: 'inventory/customer-orders', element: <CustomerOrdersPage /> },
       { path: 'inventory/order-delivery', element: <CustomerOrdersPage /> },
-      { path: 'inventory/stock-adjustment', element: <InventoryDocumentsPage kind="stock_adjustment_in" /> },
-      { path: 'inventory/damaged-stock', element: <InventoryDocumentsPage kind="damaged_stock" /> },
-      { path: 'inventory/stock-write-off', element: <InventoryDocumentsPage kind="stock_write_off" /> },
+      { path: 'inventory/stock-adjustment', element: <StockAdjustmentPage /> },
+      { path: 'inventory/stock-adjustments', element: <StockAdjustmentPage /> },
+      { path: 'inventory/count-reconciliation', element: <StockAdjustmentPage /> },
+      { path: 'inventory/stock-reconciliation', element: <StockAdjustmentPage /> },
+      { path: 'inventory/stock-adjustments-and-count-reconciliation', element: <StockAdjustmentPage /> },
+      { path: 'stock-adjustment', element: <StockAdjustmentPage /> },
+      { path: 'stock-adjustments', element: <StockAdjustmentPage /> },
+      { path: 'count-reconciliation', element: <StockAdjustmentPage /> },
+      { path: 'inventory/damaged-stock', element: <DamagedStockPage /> },
+      { path: 'inventory/damaged-and-defective-stock', element: <DamagedStockPage /> },
+      { path: 'inventory/defective-stock', element: <DamagedStockPage /> },
+      { path: 'damaged-stock', element: <DamagedStockPage /> },
+      { path: 'defective-stock', element: <DamagedStockPage /> },
+      { path: 'damaged-and-defective-stock', element: <DamagedStockPage /> },
+      { path: 'inventory/stock-write-off', element: <StockWriteOffPage /> },
+      { path: 'inventory/stock-write-offs', element: <StockWriteOffPage /> },
+      { path: 'inventory/write-off', element: <StockWriteOffPage /> },
+      { path: 'inventory/write-offs', element: <StockWriteOffPage /> },
+      { path: 'inventory/stock-writeoff', element: <StockWriteOffPage /> },
+      { path: 'inventory/stock-writeoffs', element: <StockWriteOffPage /> },
+      { path: 'stock-write-off', element: <StockWriteOffPage /> },
+      { path: 'stock-write-offs', element: <StockWriteOffPage /> },
+      { path: 'stock-writeoff', element: <StockWriteOffPage /> },
+      { path: 'stock-writeoffs', element: <StockWriteOffPage /> },
+      { path: 'write-off', element: <StockWriteOffPage /> },
       { path: 'inventory/low-stock', element: <CurrentStockPage mode="low" /> },
       { path: 'inventory/valuation', element: <CurrentStockPage mode="valuation" /> },
       { path: 'inventory/stock-movement', element: <StockMovementPage /> },
+      { path: 'inventory/stock-movement-history', element: <StockMovementPage /> },
+      { path: 'inventory/stock-movements', element: <StockMovementPage /> },
+      { path: 'inventory/movement-history', element: <StockMovementPage /> },
+      { path: 'stock-movement', element: <StockMovementPage /> },
+      { path: 'stock-movement-history', element: <StockMovementPage /> },
+      { path: 'stock-movements', element: <StockMovementPage /> },
+      { path: 'movement-history', element: <StockMovementPage /> },
       { path: 'purchases/new', element: <PurchaseEntryPage /> },
       { path: 'purchases/:id', element: <PurchaseHistoryPage /> },
       { path: 'purchases', element: <PurchaseHistoryPage /> },
@@ -130,6 +195,8 @@ export const router = createBrowserRouter([
       { path: 'supplier-payments', element: <SupplierAccountsPage mode='payments' /> },
       { path: 'suppliers/balances', element: <SupplierAccountsPage mode='balances' /> },
       { path: 'suppliers/statement', element: <SupplierAccountsPage mode='statement' /> },
+      { path: 'finance/supplier-balances', element: <SupplierAccountsPage mode='balances' /> },
+      { path: 'finance/supplier-statement', element: <SupplierAccountsPage mode='statement' /> },
       // Sales routes
       { path: 'sales/pos', element: <PosInvoicePage /> },
       { path: 'sales/new-create', element: <PosInvoicePage /> },
@@ -139,9 +206,27 @@ export const router = createBrowserRouter([
       { path: 'invoice/shift-and-cash-drawer', element: <PosShiftPage /> },
       { path: 'sales/invoices/:id', element: <SalesInvoicesPage /> },
       { path: 'sales/invoices', element: <SalesInvoicesPage /> },
+      { path: 'invoice/billing-register', element: <SalesInvoicesPage /> },
+      { path: 'sales/billing-register', element: <SalesInvoicesPage /> },
+      { path: 'invoice/sales-invoices', element: <SalesInvoicesPage /> },
       { path: 'sales/held', element: <PosInvoicePage /> },
       { path: 'sales/returns', element: <SalesReturnsPage /> },
+      { path: 'sales/credit-notes', element: <SalesReturnsPage /> },
+      { path: 'sales/returns-register', element: <SalesReturnsPage /> },
+      { path: 'invoice/sales-returns', element: <SalesReturnsPage /> },
+      { path: 'invoice/credit-notes', element: <SalesReturnsPage /> },
+      { path: 'invoice/returns-register', element: <SalesReturnsPage /> },
       { path: 'sales/new-return', element: <NewSalesReturnPage /> },
+      { path: 'sales/process-return', element: <NewSalesReturnPage /> },
+      { path: 'sales/process-sales-return', element: <NewSalesReturnPage /> },
+      { path: 'invoice/process-sales-return', element: <NewSalesReturnPage /> },
+      { path: 'sales/refunds', element: <RefundsPage /> },
+      { path: 'sales/customer-refunds', element: <RefundsPage /> },
+      { path: 'sales/disbursements', element: <RefundsPage /> },
+      { path: 'sales/refunds-register', element: <RefundsPage /> },
+      { path: 'invoice/refunds', element: <RefundsPage /> },
+      { path: 'invoice/customer-refunds', element: <RefundsPage /> },
+      { path: 'invoice/disbursements', element: <RefundsPage /> },
       { path: 'staff', element: <StaffPage /> },
       { path: 'admin/staff', element: <StaffPage /> },
       { path: 'create/staff', element: <StaffPage /> },
@@ -192,10 +277,19 @@ export const router = createBrowserRouter([
 
       // Phase 9 Barcode & POS Extras routes
       { path: 'inventory/generate-barcode', element: <BarcodeGeneratorPage /> },
+      { path: 'inventory/barcode-generator', element: <BarcodeGeneratorPage /> },
+      { path: 'inventory/barcode-designer', element: <BarcodeGeneratorPage /> },
+      { path: 'inventory/batch-label-designer', element: <BarcodeGeneratorPage /> },
+      { path: 'inventory/batch-labels', element: <BarcodeGeneratorPage /> },
+      { path: 'inventory/labels', element: <BarcodeGeneratorPage /> },
+      { path: 'barcode-generator', element: <BarcodeGeneratorPage /> },
+      { path: 'batch-label-designer', element: <BarcodeGeneratorPage /> },
       { path: 'extras/barcode-labels', element: <BarcodeGeneratorPage /> },
       { path: 'extras/shortcut-keys', element: <ShortcutKeysPage /> },
       { path: 'extras/price-check', element: <PriceCheckPage /> },
       { path: 'extras/price-change', element: <PriceCheckPage /> },
+      { path: 'extras/backup-and-restore', element: <BackupAndRestorePage /> },
+      { path: 'extras/system-settings', element: <SystemSettingsPage /> },
       { path: 'create/generate-barcode', element: <BarcodeGeneratorPage /> },
       { path: 'create/add-barcode', element: <BarcodeGeneratorPage /> },
 

@@ -1,8 +1,21 @@
 import { z } from 'zod'
 import type { UUID, ISODateTime } from './domain'
 
-export type PosSessionStatus = 'open' | 'closed' | 'audited'
-export type CashMovementType = 'cash_in' | 'cash_out' | 'drop_to_safe' | 'float_adjustment'
+export type PosSessionStatus = 'open' | 'closed' | 'audited' | 'auto_closed' | 'OPEN' | 'CLOSED' | 'AUTO_CLOSED'
+export type ClosingType = 'manual' | 'auto' | 'MANUAL' | 'AUTO'
+
+export type CashMovementType =
+  | 'cash_in'
+  | 'cash_out'
+  | 'drop_to_safe'
+  | 'float_adjustment'
+  | 'deposit'
+  | 'sale'
+  | 'customer_payment'
+  | 'refund'
+  | 'expense'
+
+export type TransactionDirection = 'in' | 'out' | 'IN' | 'OUT'
 
 export interface PosRegisterSession {
   id: UUID
@@ -20,9 +33,18 @@ export interface PosRegisterSession {
   total_sales_card: number
   total_sales_credit: number
   total_sales_cheque: number
+  total_customer_payments_cash?: number
+  total_expenses_cash?: number
+  total_refunds_cash?: number
+  total_cash_deposits?: number
+  total_cash_in?: number
+  total_cash_out?: number
   status: PosSessionStatus
+  closing_type?: ClosingType
+  closed_by?: UUID | null
   auto_journal_id?: UUID | null
   notes: string | null
+  closing_note?: string | null
   created_at: ISODateTime
   updated_at: ISODateTime
   branch_name?: string
@@ -35,11 +57,19 @@ export interface PosCashMovement {
   company_id: UUID
   branch_id: UUID
   movement_type: CashMovementType
+  transaction_type?: string
+  direction?: TransactionDirection
   amount: number
   reason: string
+  reference_type?: string | null
+  reference_id?: string | null
+  payment_method?: string
+  notes?: string | null
   authorized_by_id: UUID | null
+  created_by?: UUID | null
   created_at: ISODateTime
   authorized_by_name?: string
+  user_name?: string
 }
 
 export interface ActiveShiftMetrics {
@@ -52,6 +82,19 @@ export interface ActiveShiftMetrics {
   opened_at: ISODateTime
   opening_cash_float: number
   current_drawer_cash: number
+  expected_cash: number
+
+  // Complete Shoe Gallery Breakdown Cards
+  opening_cash: number
+  cash_sales: number
+  customer_payments: number
+  other_cash_in: number
+  refunds: number
+  expenses: number
+  cash_deposits: number
+  other_cash_out: number
+
+  // Legacy & Tender Metrics
   total_sales_cash: number
   total_sales_card: number
   total_sales_cheque: number
@@ -81,6 +124,16 @@ export interface ZReportData {
   opened_at: ISODateTime
   closed_at: ISODateTime
   opening_float: number
+
+  // Breakdown
+  cash_sales?: number
+  customer_payments?: number
+  other_cash_in?: number
+  refunds?: number
+  expenses?: number
+  cash_deposits?: number
+  other_cash_out?: number
+
   total_sales_cash: number
   total_sales_card: number
   total_sales_cheque: number
@@ -95,25 +148,53 @@ export interface ZReportData {
   auto_journal_id?: UUID | null
   invoice_count: number
   notes?: string | null
+  closing_type?: ClosingType
   denominations?: DenominationCounts
 }
 
+export interface ShiftCashTransactionRecord {
+  id: string
+  created_at: string
+  transaction_type: string
+  direction: 'in' | 'out'
+  amount: number
+  reason: string
+  reference_type?: string | null
+  reference_id?: string | null
+  payment_method: string
+  notes?: string | null
+  user_name?: string
+}
+
 export const OpenPosShiftSchema = z.object({
-  branch_id: z.string().uuid('Please select a valid branch'),
+  branch_id: z.string().min(1, 'Please select a valid branch'),
   terminal_name: z.string().min(1, 'Terminal name is required'),
   opening_float: z.number().min(0, 'Opening cash float cannot be negative'),
+  notes: z.string().optional(),
 })
 
 export const CashMovementSchema = z.object({
-  session_id: z.string().uuid(),
-  movement_type: z.enum(['cash_in', 'cash_out', 'drop_to_safe', 'float_adjustment']),
+  session_id: z.string().min(1, 'Valid session ID required'),
+  movement_type: z.enum([
+    'cash_in',
+    'cash_out',
+    'drop_to_safe',
+    'float_adjustment',
+    'deposit',
+    'expense',
+    'refund',
+    'customer_payment',
+    'sale',
+  ]),
   amount: z.number().positive('Amount must be greater than 0'),
   reason: z.string().min(1, 'Reason is required'),
-  authorized_by_id: z.string().uuid().optional(),
+  notes: z.string().optional(),
+  authorized_by_id: z.string().optional(),
 })
 
 export const ClosePosShiftSchema = z.object({
-  session_id: z.string().uuid(),
+  session_id: z.string().min(1, 'Valid session ID required'),
   closing_cash_counted: z.number().min(0, 'Counted cash cannot be negative'),
   notes: z.string().optional(),
 })
+

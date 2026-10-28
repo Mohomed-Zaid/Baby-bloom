@@ -109,8 +109,8 @@ export interface IncomeAndExpenseEntry {
   status: 'draft' | 'posted' | 'reversed'
   posted_at?: string | null
   created_at: string
-  category_account?: ChartOfAccount
-  paid_through_account?: ChartOfAccount
+  category_account?: ChartOfAccount | Partial<ChartOfAccount>
+  paid_through_account?: ChartOfAccount | Partial<ChartOfAccount>
   branch?: { id: string; name: string }
 }
 
@@ -123,6 +123,7 @@ export interface BankStatement {
   closing_balance: number
   reconciled_at?: string | null
   status: 'open' | 'reconciled'
+  created_at?: string
   bank_account?: {
     id: string
     bank_name: string

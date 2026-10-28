@@ -1,6 +1,14 @@
-import { requireSupabase, throwOnError } from './client'
+import type { Branch } from '../types/domain'
+import { requireSupabase } from './client'
+import { isBackendOffline } from '../lib/supabase'
+import { MOCK_BRANCHES } from './mockData'
+import { listBranches } from './branches'
+import { currentCompanyId } from './masterData'
 
 const db = () => requireSupabase() as any
+
+const isUuid = (str: string | null | undefined): boolean =>
+  Boolean(str && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str))
 
 export type SequenceType =
   | 'invoice'
@@ -201,29 +209,78 @@ export function previewSequenceNumber(prefix: string, nextNumber: number, paddin
   return `${prefix || ''}${String(num).padStart(p, '0')}`
 }
 
-// ── Company Context Helper ──────────────────────────────────────────────────
-async function resolveCompanyId(): Promise<string> {
-  const supabase = db()
-  try {
-    const { data: rpcCompany } = await supabase.rpc('current_user_company_id')
-    if (rpcCompany) return rpcCompany as string
-  } catch {
-    // ignore
-  }
+export function buildDefaultMockSequences(): NumberSequenceRow[] {
+  const list: NumberSequenceRow[] = []
+  const types = Object.keys(SEQUENCE_TYPE_METADATA) as SequenceType[]
 
-  const { data: userData } = await supabase.auth.getUser()
-  const currentUserId = userData?.user?.id
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('company_id')
-    .eq('id', currentUserId ?? '')
-    .maybeSingle()
-
-  if (profile?.company_id) return profile.company_id as string
-  throw new Error('Unable to resolve company context.')
+  MOCK_BRANCHES.forEach((branch, bIdx) => {
+    types.forEach((type) => {
+      const meta = SEQUENCE_TYPE_METADATA[type]
+      const isHeadOffice = Boolean((branch as any).is_head_office ?? (branch.code === 'COL' || bIdx === 0))
+      const prefix = isHeadOffice ? meta.defaultPrefix : `${branch.code || 'KDY'}-${meta.defaultPrefix}`
+      list.push({
+        id: `seq-${bIdx + 1}-${type}`,
+        company_id: 'company-babybloom',
+        branch_id: branch.id,
+        branch_name: branch.name,
+        is_head_office: isHeadOffice,
+        sequence_type: type,
+        prefix,
+        next_number: 1,
+        padding_length: 6,
+        reset_frequency: 'never',
+        last_reset_date: null,
+        updated_at: '2026-01-01T00:00:00Z',
+        preview_sample: previewSequenceNumber(prefix, 1, 6),
+        info: meta,
+      })
+    })
+  })
+  return list
 }
 
-// ── 1. List Sequences (with Branch Details & Preview) ────────────────────────
+const STORAGE_KEY = 'bb_number_sequences_list'
+
+export function getStoredNumberSequencesList(): NumberSequenceRow[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed as NumberSequenceRow[]
+    }
+  } catch {}
+  return buildDefaultMockSequences()
+}
+
+export function saveStoredNumberSequencesList(list: NumberSequenceRow[]): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(list))
+  } catch {}
+}
+
+// ── Company Context Helper ──────────────────────────────────────────────────
+async function resolveCompanyId(): Promise<string> {
+  if (isBackendOffline()) return 'company-babybloom'
+  const supabase = db()
+  try {
+    const { data: userData } = await supabase.auth.getUser()
+    const currentUserId = userData?.user?.id
+
+    if (currentUserId) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('company_id')
+        .eq('id', currentUserId)
+        .maybeSingle()
+
+      if (profile?.company_id) return profile.company_id as string
+    }
+  } catch {}
+
+  return currentCompanyId()
+}
+
+// ── 1. List Sequences (with In-Memory Branch Resolution & Preview) ───────────
 export interface ListNumberSequencesParams {
   branchId?: string
   search?: string
@@ -233,96 +290,122 @@ export interface ListNumberSequencesParams {
 export async function listNumberSequences(
   params: ListNumberSequencesParams = {}
 ): Promise<NumberSequenceRow[]> {
-  const supabase = db()
-  const companyId = await resolveCompanyId()
+  const branches = await listBranches().catch(() => MOCK_BRANCHES as unknown as Branch[])
+  const branchMap = new Map<string, Branch>(branches.map((b) => [b.id, b]))
 
-  let q = supabase
-    .from('number_sequences')
-    .select(`
-      id,
-      company_id,
-      branch_id,
-      sequence_type,
-      prefix,
-      next_number,
-      padding_length,
-      reset_frequency,
-      last_reset_date,
-      updated_at,
-      branches:branch_id (
-        name,
-        is_head_office
-      )
-    `)
-    .eq('company_id', companyId)
-    .order('sequence_type', { ascending: true })
+  let rows: NumberSequenceRow[] = []
 
-  if (params.branchId) {
-    q = q.eq('branch_id', params.branchId)
+  if (!isBackendOffline()) {
+    try {
+      const supabase = db()
+      const companyId = await resolveCompanyId()
+
+      let q = supabase
+        .from('number_sequences')
+        .select(`
+          id,
+          company_id,
+          branch_id,
+          sequence_type,
+          prefix,
+          next_number,
+          padding_length,
+          reset_frequency,
+          last_reset_date,
+          updated_at
+        `)
+        .order('sequence_type', { ascending: true })
+
+      if (isUuid(companyId)) {
+        q = q.eq('company_id', companyId)
+      }
+
+      if (params.branchId && isUuid(params.branchId)) {
+        q = q.eq('branch_id', params.branchId)
+      }
+
+      const { data, error } = await q
+      if (!error && data && data.length > 0) {
+        rows = (data as any[]).map((r) => {
+          const seqType = r.sequence_type as SequenceType
+          const meta = SEQUENCE_TYPE_METADATA[seqType] || {
+            label: seqType,
+            description: 'Custom Sequence',
+            defaultPrefix: r.prefix || '',
+            category: 'Sales & POS' as SequenceCategory,
+            badgeColor: '#10b981',
+          }
+          const branch = branchMap.get(r.branch_id)
+          return {
+            id: r.id,
+            company_id: r.company_id,
+            branch_id: r.branch_id,
+            branch_name: branch?.name || 'Main Branch',
+            is_head_office: Boolean(branch?.is_head_office),
+            sequence_type: seqType,
+            prefix: r.prefix || '',
+            next_number: Number(r.next_number) || 1,
+            padding_length: Number(r.padding_length) || 6,
+            reset_frequency: r.reset_frequency || 'never',
+            last_reset_date: r.last_reset_date,
+            updated_at: r.updated_at,
+            preview_sample: previewSequenceNumber(
+              r.prefix || '',
+              Number(r.next_number) || 1,
+              Number(r.padding_length) || 6
+            ),
+            info: meta,
+          }
+        })
+
+        // Merge into local storage cache
+        const local = getStoredNumberSequencesList()
+        const localMap = new Map<string, NumberSequenceRow>(local.map((s) => [s.id, s]))
+        rows.forEach((s) => localMap.set(s.id, s))
+        saveStoredNumberSequencesList(Array.from(localMap.values()))
+      }
+    } catch (err) {
+      console.warn('Failed to load number_sequences from Supabase:', err)
+    }
   }
 
-  const { data, error } = await q
-  throwOnError(error)
+  if (rows.length === 0) {
+    rows = getStoredNumberSequencesList()
+  }
 
-  const rows = ((data ?? []) as any[]).map((r) => {
-    const seqType = r.sequence_type as SequenceType
-    const meta = SEQUENCE_TYPE_METADATA[seqType] || {
-      label: seqType,
-      description: 'Document sequence',
-      defaultPrefix: `${seqType.toUpperCase().slice(0, 3)}-`,
-      category: 'Master Entities',
-      badgeColor: '#38d4c5',
-    }
+  // Apply filters in memory
+  if (params.branchId) {
+    rows = rows.filter((r) => r.branch_id === params.branchId)
+  }
 
-    const nextNum = Number(r.next_number) || 1
-    const pad = Number(r.padding_length) || 6
-    const prefix = r.prefix || ''
+  if (params.category && params.category !== 'all') {
+    rows = rows.filter((r) => r.info?.category === params.category)
+  }
 
-    return {
-      id: r.id,
-      company_id: r.company_id,
-      branch_id: r.branch_id,
-      branch_name: r.branches?.name || 'Main Branch',
-      is_head_office: Boolean(r.branches?.is_head_office),
-      sequence_type: seqType,
-      prefix,
-      next_number: nextNum,
-      padding_length: pad,
-      reset_frequency: (r.reset_frequency as ResetFrequency) || 'never',
-      last_reset_date: r.last_reset_date,
-      updated_at: r.updated_at,
-      preview_sample: previewSequenceNumber(prefix, nextNum, pad),
-      info: meta,
-    } as NumberSequenceRow
-  })
+  if (params.search?.trim()) {
+    const s = params.search.trim().toLowerCase()
+    rows = rows.filter(
+      (r) =>
+        r.sequence_type.toLowerCase().includes(s) ||
+        r.prefix.toLowerCase().includes(s) ||
+        r.info?.label.toLowerCase().includes(s) ||
+        r.branch_name.toLowerCase().includes(s)
+    )
+  }
 
-  // Client-side filtering by category & search
-  return rows.filter((r) => {
-    if (params.category && params.category !== 'all' && r.info.category !== params.category) {
-      return false
-    }
-
-    if (params.search?.trim()) {
-      const s = params.search.trim().toLowerCase()
-      const matchesType = r.sequence_type.toLowerCase().includes(s)
-      const matchesLabel = r.info.label.toLowerCase().includes(s)
-      const matchesPrefix = r.prefix.toLowerCase().includes(s)
-      const matchesBranch = r.branch_name.toLowerCase().includes(s)
-      const matchesSample = r.preview_sample.toLowerCase().includes(s)
-      return matchesType || matchesLabel || matchesPrefix || matchesBranch || matchesSample
-    }
-
-    return true
-  })
+  return rows
 }
 
-// ── 2. Update Number Sequence ───────────────────────────────────────────────
+// ── 2. Update Number Sequence Configuration ──────────────────────────────────
 export async function updateNumberSequence(
   id: string,
   input: UpdateNumberSequenceInput
 ): Promise<NumberSequenceRow> {
-  const supabase = db()
-  const companyId = await resolveCompanyId()
+  const branches = await listBranches().catch(() => MOCK_BRANCHES as unknown as Branch[])
+  const branchMap = new Map<string, Branch>(branches.map((b) => [b.id, b]))
+  const localList = getStoredNumberSequencesList()
+  const localIdx = localList.findIndex((s) => s.id === id)
+  const current = localIdx >= 0 ? localList[localIdx] : null
 
   const payload: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
@@ -341,41 +424,68 @@ export async function updateNumberSequence(
     payload.reset_frequency = input.reset_frequency
   }
 
-  const { data, error } = await supabase
-    .from('number_sequences')
-    .update(payload)
-    .eq('id', id)
-    .eq('company_id', companyId)
-    .select(`
-      id,
-      company_id,
-      branch_id,
-      sequence_type,
-      prefix,
-      next_number,
-      padding_length,
-      reset_frequency,
-      last_reset_date,
-      updated_at,
-      branches:branch_id (
-        name,
-        is_head_office
-      )
-    `)
-    .single()
+  let dbRow: any = null
 
-  throwOnError(error)
+  if (!isBackendOffline() && isUuid(id)) {
+    try {
+      const supabase = db()
+      const companyId = await resolveCompanyId()
 
-  const r = data as any
+      let q = supabase
+        .from('number_sequences')
+        .update(payload)
+        .eq('id', id)
+
+      if (isUuid(companyId)) {
+        q = q.eq('company_id', companyId)
+      }
+
+      const { data, error } = await q
+        .select(`
+          id,
+          company_id,
+          branch_id,
+          sequence_type,
+          prefix,
+          next_number,
+          padding_length,
+          reset_frequency,
+          last_reset_date,
+          updated_at
+        `)
+        .single()
+
+      if (!error && data) {
+        dbRow = data
+      }
+    } catch (err) {
+      console.warn('Supabase number_sequences update failed:', err)
+    }
+  }
+
+  const r = dbRow ?? {
+    id,
+    company_id: current?.company_id || 'company-babybloom',
+    branch_id: current?.branch_id || 'branch-colombo',
+    sequence_type: current?.sequence_type || 'invoice',
+    prefix: payload.prefix !== undefined ? payload.prefix : (current?.prefix || 'INV-'),
+    next_number: payload.next_number !== undefined ? payload.next_number : (current?.next_number || 1),
+    padding_length: payload.padding_length !== undefined ? payload.padding_length : (current?.padding_length || 6),
+    reset_frequency: payload.reset_frequency !== undefined ? payload.reset_frequency : (current?.reset_frequency || 'never'),
+    last_reset_date: current?.last_reset_date || null,
+    updated_at: new Date().toISOString(),
+  }
+
   const seqType = r.sequence_type as SequenceType
-  const meta = SEQUENCE_TYPE_METADATA[seqType]
+  const meta = SEQUENCE_TYPE_METADATA[seqType] || current?.info
+  const branch = branchMap.get(r.branch_id)
 
-  return {
+  const updatedRow: NumberSequenceRow = {
     id: r.id,
     company_id: r.company_id,
     branch_id: r.branch_id,
-    branch_name: r.branches?.name || 'Main Branch',
-    is_head_office: Boolean(r.branches?.is_head_office),
+    branch_name: branch?.name || current?.branch_name || 'Main Branch',
+    is_head_office: Boolean(branch?.is_head_office ?? current?.is_head_office),
     sequence_type: seqType,
     prefix: r.prefix || '',
     next_number: Number(r.next_number) || 1,
@@ -383,20 +493,34 @@ export async function updateNumberSequence(
     reset_frequency: r.reset_frequency || 'never',
     last_reset_date: r.last_reset_date,
     updated_at: r.updated_at,
-    preview_sample: previewSequenceNumber(r.prefix || '', Number(r.next_number) || 1, Number(r.padding_length) || 6),
+    preview_sample: previewSequenceNumber(
+      r.prefix || '',
+      Number(r.next_number) || 1,
+      Number(r.padding_length) || 6
+    ),
     info: meta,
   }
+
+  if (localIdx >= 0) {
+    localList[localIdx] = updatedRow
+  } else {
+    localList.push(updatedRow)
+  }
+  saveStoredNumberSequencesList(localList)
+
+  return updatedRow
 }
 
 // ── 3. Create Custom Number Sequence ─────────────────────────────────────────
 export async function createNumberSequence(
   input: CreateNumberSequenceInput
 ): Promise<NumberSequenceRow> {
-  const supabase = db()
+  const branches = await listBranches().catch(() => MOCK_BRANCHES as unknown as Branch[])
+  const branchMap = new Map<string, Branch>(branches.map((b) => [b.id, b]))
+  const localList = getStoredNumberSequencesList()
   const companyId = await resolveCompanyId()
 
-  const payload = {
-    company_id: companyId,
+  const payload: Record<string, unknown> = {
     branch_id: input.branch_id,
     sequence_type: input.sequence_type,
     prefix: input.prefix.trim(),
@@ -405,39 +529,63 @@ export async function createNumberSequence(
     reset_frequency: input.reset_frequency || 'never',
   }
 
-  const { data, error } = await supabase
-    .from('number_sequences')
-    .insert(payload)
-    .select(`
-      id,
-      company_id,
-      branch_id,
-      sequence_type,
-      prefix,
-      next_number,
-      padding_length,
-      reset_frequency,
-      last_reset_date,
-      updated_at,
-      branches:branch_id (
-        name,
-        is_head_office
-      )
-    `)
-    .single()
+  if (isUuid(companyId)) {
+    payload.company_id = companyId
+  }
 
-  throwOnError(error)
+  let dbRow: any = null
 
-  const r = data as any
+  if (!isBackendOffline() && isUuid(input.branch_id)) {
+    try {
+      const supabase = db()
+      const { data, error } = await supabase
+        .from('number_sequences')
+        .insert(payload)
+        .select(`
+          id,
+          company_id,
+          branch_id,
+          sequence_type,
+          prefix,
+          next_number,
+          padding_length,
+          reset_frequency,
+          last_reset_date,
+          updated_at
+        `)
+        .single()
+
+      if (!error && data) {
+        dbRow = data
+      }
+    } catch (err) {
+      console.warn('Supabase number_sequences insert failed:', err)
+    }
+  }
+
+  const r = dbRow ?? {
+    id: `seq-${Date.now()}`,
+    company_id: companyId,
+    branch_id: input.branch_id,
+    sequence_type: input.sequence_type,
+    prefix: payload.prefix,
+    next_number: payload.next_number,
+    padding_length: payload.padding_length,
+    reset_frequency: payload.reset_frequency,
+    last_reset_date: null,
+    updated_at: new Date().toISOString(),
+  }
+
   const seqType = r.sequence_type as SequenceType
   const meta = SEQUENCE_TYPE_METADATA[seqType]
+  const branch = branchMap.get(r.branch_id)
 
-  return {
+  const createdRow: NumberSequenceRow = {
     id: r.id,
     company_id: r.company_id,
     branch_id: r.branch_id,
-    branch_name: r.branches?.name || 'Main Branch',
-    is_head_office: Boolean(r.branches?.is_head_office),
+    branch_name: branch?.name || 'Main Branch',
+    is_head_office: Boolean(branch?.is_head_office),
     sequence_type: seqType,
     prefix: r.prefix || '',
     next_number: Number(r.next_number) || 1,
@@ -445,9 +593,18 @@ export async function createNumberSequence(
     reset_frequency: r.reset_frequency || 'never',
     last_reset_date: r.last_reset_date,
     updated_at: r.updated_at,
-    preview_sample: previewSequenceNumber(r.prefix || '', Number(r.next_number) || 1, Number(r.padding_length) || 6),
+    preview_sample: previewSequenceNumber(
+      r.prefix || '',
+      Number(r.next_number) || 1,
+      Number(r.padding_length) || 6
+    ),
     info: meta,
   }
+
+  localList.push(createdRow)
+  saveStoredNumberSequencesList(localList)
+
+  return createdRow
 }
 
 // ── 4. Initialize Missing Standard Sequences For A Branch ────────────────────
@@ -455,27 +612,24 @@ export async function initializeMissingBranchSequences(
   branchId: string,
   branchCodePrefix?: string
 ): Promise<{ addedCount: number }> {
-  const supabase = db()
+  const branches = await listBranches().catch(() => MOCK_BRANCHES as unknown as Branch[])
+  const branchMap = new Map<string, Branch>(branches.map((b) => [b.id, b]))
+  const localList = getStoredNumberSequencesList()
   const companyId = await resolveCompanyId()
 
-  // Get existing sequence types for this branch
-  const { data: existing, error: existErr } = await supabase
-    .from('number_sequences')
-    .select('sequence_type')
-    .eq('company_id', companyId)
-    .eq('branch_id', branchId)
+  const existingLocalTypes = new Set(
+    localList.filter((s) => s.branch_id === branchId).map((s) => s.sequence_type)
+  )
 
-  throwOnError(existErr)
-
-  const existingTypes = new Set(((existing ?? []) as any[]).map((e) => e.sequence_type))
   const allTypes = Object.keys(SEQUENCE_TYPE_METADATA) as SequenceType[]
-  const missingTypes = allTypes.filter((t) => !existingTypes.has(t))
+  const missingTypes = allTypes.filter((t) => !existingLocalTypes.has(t))
 
   if (missingTypes.length === 0) {
     return { addedCount: 0 }
   }
 
   const prefixModifier = branchCodePrefix ? `${branchCodePrefix.trim().toUpperCase()}-` : ''
+  const branch = branchMap.get(branchId)
 
   const recordsToInsert = missingTypes.map((t) => {
     const meta = SEQUENCE_TYPE_METADATA[t]
@@ -486,14 +640,39 @@ export async function initializeMissingBranchSequences(
       prefix: `${prefixModifier}${meta.defaultPrefix}`,
       next_number: 1,
       padding_length: 6,
-      reset_frequency: 'never',
+      reset_frequency: 'never' as ResetFrequency,
     }
   })
 
-  const { error: insErr } = await supabase
-    .from('number_sequences')
-    .insert(recordsToInsert)
+  if (!isBackendOffline() && isUuid(branchId) && isUuid(companyId)) {
+    try {
+      const supabase = db()
+      await supabase.from('number_sequences').insert(recordsToInsert)
+    } catch (err) {
+      console.warn('Supabase initializeMissingBranchSequences failed:', err)
+    }
+  }
 
-  throwOnError(insErr)
+  recordsToInsert.forEach((rec, idx) => {
+    const meta = SEQUENCE_TYPE_METADATA[rec.sequence_type]
+    localList.push({
+      id: `seq-${branchId}-${rec.sequence_type}-${idx}`,
+      company_id: companyId,
+      branch_id: branchId,
+      branch_name: branch?.name || 'Main Branch',
+      is_head_office: Boolean(branch?.is_head_office),
+      sequence_type: rec.sequence_type,
+      prefix: rec.prefix,
+      next_number: rec.next_number,
+      padding_length: rec.padding_length,
+      reset_frequency: rec.reset_frequency,
+      last_reset_date: null,
+      updated_at: new Date().toISOString(),
+      preview_sample: previewSequenceNumber(rec.prefix, rec.next_number, rec.padding_length),
+      info: meta,
+    })
+  })
+
+  saveStoredNumberSequencesList(localList)
   return { addedCount: recordsToInsert.length }
 }

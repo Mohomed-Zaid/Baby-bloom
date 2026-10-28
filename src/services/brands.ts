@@ -1,4 +1,5 @@
 import { requireSupabase, throwOnError } from './client'
+import { currentCompanyId } from './masterData'
 
 const safe = (v: string) => v.replaceAll(',', ' ').replaceAll('%', '\\%')
 
@@ -79,16 +80,20 @@ export async function createBrand(input: CreateBrandInput): Promise<BrandRow> {
 
   // Resolve company context
   const { data: userData } = await supabase.auth.getUser()
-  const currentUserId = userData?.user?.id
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('company_id')
-    .eq('id', currentUserId ?? '')
-    .maybeSingle()
+  const currentUserId = userData?.user?.id ?? null
+  let companyId: string | null = null
 
-  const companyId = profile?.company_id
+  if (currentUserId) {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('company_id')
+      .eq('id', currentUserId)
+      .maybeSingle()
+    companyId = profile?.company_id ?? null
+  }
+
   if (!companyId) {
-    throw new Error('Unable to resolve company context.')
+    companyId = await currentCompanyId()
   }
 
   let code = input.code?.trim()

@@ -7,6 +7,7 @@ import { useAuthStore } from '../../stores/authStore'
 import { useBranchStore } from '../../stores/branchStore'
 import { useUiStore } from '../../stores/uiStore'
 import { fetchActiveShiftSession } from '../../services/shiftService'
+import { logLogoutEvent } from '../../services/auditService'
 
 function useShiftTimer(openedAt?: string | null) {
   const [elapsed, setElapsed] = useState('')
@@ -36,11 +37,37 @@ export function Header() {
   const clearUser = useAuthStore((state) => state.clearUser)
   const clearBranch = useBranchStore((state) => state.clearBranch)
   const openMobileSidebar = useUiStore((state) => state.setMobileSidebarOpen)
+  const toggleSidebar = useUiStore((state) => state.toggleSidebar)
+  const sidebarCollapsed = useUiStore((state) => state.sidebarCollapsed)
+
+  const handleSidebarToggle = () => {
+    if (window.innerWidth <= 768) {
+      openMobileSidebar(true)
+    } else {
+      toggleSidebar()
+    }
+  }
 
   const handleSignOut = async () => {
-    if (supabase) {
-      await supabase.auth.signOut()
+    try {
+      await logLogoutEvent({
+        branchId,
+        userId: useAuthStore.getState().user?.id,
+        staffName,
+        reason: 'Manual header sign-out',
+      })
+    } catch (e) {
+      console.warn('Failed to log signout event:', e)
     }
+    if (supabase) {
+      try {
+        await supabase.auth.signOut()
+      } catch {
+        // ignore
+      }
+    }
+    localStorage.removeItem('bb_demo_user')
+    sessionStorage.setItem('bb_logged_out', 'true')
     clearUser()
     clearBranch()
     navigate('/login', { replace: true })
@@ -62,8 +89,14 @@ export function Header() {
 
   return (
     <header className="app-header">
-      <button type="button" className="icon-button mobile-menu-button" onClick={() => openMobileSidebar(true)} aria-label="Open navigation">
-        <Menu size={20} />
+      <button
+        type="button"
+        className="sidebar-toggle-btn"
+        onClick={handleSidebarToggle}
+        aria-label={sidebarCollapsed ? 'Expand sidebar (Ctrl+B)' : 'Collapse sidebar (Ctrl+B)'}
+        title={sidebarCollapsed ? 'Expand sidebar (Ctrl+B)' : 'Collapse sidebar (Ctrl+B)'}
+      >
+        <Menu size={19} />
       </button>
 
       <div className="branch-context">

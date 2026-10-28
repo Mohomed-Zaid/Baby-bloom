@@ -41,7 +41,7 @@ export interface PosRegister {
 }
 
 export const PosRegisterSchema = z.object({
-  branch_id: z.string().uuid(),
+  branch_id: z.string().min(1, 'Branch is required'),
   register_code: z.string().min(1, 'Register code is required'),
   name: z.string().min(1, 'Register name is required'),
   is_active: z.boolean().default(true),
@@ -70,13 +70,13 @@ export interface PosShift {
 }
 
 export const OpenShiftSchema = z.object({
-  register_id: z.string().uuid(),
+  register_id: z.string().min(1, 'Register is required'),
   opening_balance: z.number().min(0, 'Opening balance must be 0 or positive'),
   notes: z.string().optional(),
 })
 
 export const CloseShiftSchema = z.object({
-  shift_id: z.string().uuid(),
+  shift_id: z.string().min(1, 'Shift is required'),
   closing_balance_actual: z.number().min(0, 'Closing balance must be 0 or positive'),
   notes: z.string().optional(),
 })
@@ -101,8 +101,8 @@ export interface ChequeBook {
 }
 
 export const ChequeBookSchema = z.object({
-  branch_id: z.string().uuid(),
-  bank_account_id: z.string().uuid(),
+  branch_id: z.string().min(1, 'Branch is required'),
+  bank_account_id: z.string().min(1, 'Bank account is required'),
   book_number: z.string().min(1, 'Book number is required'),
   start_number: z.string().min(1, 'Start cheque number is required'),
   end_number: z.string().min(1, 'End cheque number is required'),
@@ -134,9 +134,9 @@ export interface Cheque {
 }
 
 export const ChequeSchema = z.object({
-  branch_id: z.string().uuid(),
+  branch_id: z.string().min(1, 'Branch is required'),
   direction: z.enum(['inbound', 'outbound']),
-  bank_account_id: z.string().uuid().optional().nullable(),
+  bank_account_id: z.string().optional().nullable(),
   cheque_number: z.string().min(1, 'Cheque number is required'),
   payee_payor_name: z.string().min(1, 'Payee or Payor name is required'),
   bank_name: z.string().optional(),
@@ -163,8 +163,8 @@ export interface BankCard {
 }
 
 export const BankCardSchema = z.object({
-  branch_id: z.string().uuid(),
-  bank_account_id: z.string().uuid(),
+  branch_id: z.string().min(1, 'Branch is required'),
+  bank_account_id: z.string().min(1, 'Bank account is required'),
   card_holder: z.string().min(1, 'Card holder name is required'),
   card_number_last4: z.string().regex(/^[0-9]{4}$/, 'Must be 4 digits'),
   card_type: z.enum(['debit', 'credit']),
@@ -207,17 +207,17 @@ export interface JournalEntry {
 }
 
 export const JournalEntrySchema = z.object({
-  branch_id: z.string().uuid(),
+  branch_id: z.string().min(1, 'Branch is required'),
   entry_date: z.string().optional(),
   description: z.string().min(1, 'Description is required'),
   reference_type: z.string().optional(),
   lines: z.array(z.object({
-    account_id: z.string().uuid(),
+    account_id: z.string().min(1, 'Account is required'),
     description: z.string().optional(),
     debit: z.number().min(0),
     credit: z.number().min(0),
     partner_type: z.enum(['customer', 'vendor', 'staff', 'none']).optional(),
-    partner_id: z.string().uuid().optional().nullable(),
+    partner_id: z.string().optional().nullable(),
   })).min(2, 'Journal entry must have at least 2 lines'),
 })
 
@@ -239,10 +239,10 @@ export interface DebitCreditNote {
 }
 
 export const DebitCreditNoteSchema = z.object({
-  branch_id: z.string().uuid(),
+  branch_id: z.string().min(1, 'Branch is required'),
   note_type: z.enum(['debit_note', 'credit_note']),
   entity_type: z.enum(['customer', 'vendor']),
-  entity_id: z.string().uuid(),
+  entity_id: z.string().min(1, 'Entity is required'),
   note_date: z.string().optional(),
   amount: z.number().positive('Amount must be positive'),
   reason: z.string().min(1, 'Reason is required'),

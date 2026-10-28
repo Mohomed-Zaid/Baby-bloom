@@ -8,6 +8,8 @@ import { useBranchStore } from '../stores/branchStore'
 import { requireSupabase, throwOnError } from '../services/client'
 import { listStaff } from '../services/staffService'
 import { currentCompanyId, nextMasterCode } from '../services/masterData'
+import { isBackendOffline } from '../lib/supabase'
+import { MOCK_CUSTOMERS } from '../services/mockData'
 import { getErrorMessage } from '../lib/errors'
 import type { Customer } from '../types/domain'
 
@@ -100,28 +102,82 @@ export function CustomersPage() {
     queryFn: () => listStaff({ branchId: branchId || undefined, activeOnly: true }),
   })
 
+  function getMockCustomersPage(search: string, p: number, ps: number) {
+    let list = [...MOCK_CUSTOMERS] as unknown as Customer[]
+    if (search.trim()) {
+      const s = search.trim().toLowerCase()
+      list = list.filter(c =>
+        c.name.toLowerCase().includes(s) ||
+        c.customer_code.toLowerCase().includes(s) ||
+        (c.phone && c.phone.toLowerCase().includes(s)) ||
+        (c.address && c.address.toLowerCase().includes(s))
+      )
+    }
+    const from = (p - 1) * ps
+    return {
+      rows: list.slice(from, from + ps),
+      count: list.length,
+    }
+  }
+
   // Load Customers
   const customersQuery = useQuery({
     queryKey: ['customers-list', appliedSearch, page],
     queryFn: async () => {
+      if (isBackendOffline()) {
+        return getMockCustomersPage(appliedSearch, page, pageSize)
+      }
       const supabase = requireSupabase()
-      let query = supabase
-        .from('customers')
-        .select('*', { count: 'exact' })
-        .order('customer_code', { ascending: false })
-        .range((page - 1) * pageSize, page * pageSize - 1)
-
-      if (appliedSearch.trim()) {
-        const term = appliedSearch.trim()
-        query = query.or(`customer_code.ilike.%${term}%,name.ilike.%${term}%,nick_name.ilike.%${term}%,phone.ilike.%${term}%,address.ilike.%${term}%,nic.ilike.%${term}%,city.ilike.%${term}%`)
+      const session = (await supabase.auth.getSession()).data.session
+      if (!session) {
+        return getMockCustomersPage(appliedSearch, page, pageSize)
       }
 
-      const { data, error, count } = await query
-      throwOnError(error)
-      return {
-        rows: (data ?? []) as unknown as Customer[],
-        count: count ?? 0,
+      try {
+        let query = supabase
+          .from('customers')
+          .select('*', { count: 'exact' })
+          .is('deleted_at', null)
+          .order('customer_code', { ascending: false })
+          .range((page - 1) * pageSize, page * pageSize - 1)
+
+        if (appliedSearch.trim()) {
+          const term = appliedSearch.trim()
+          query = query.or(`customer_code.ilike.%${term}%,name.ilike.%${term}%,contact_person.ilike.%${term}%,phone.ilike.%${term}%,address.ilike.%${term}%,city.ilike.%${term}%`)
+        }
+
+        const { data, error, count } = await query
+        if (!error && data) {
+          const rows = data.map((c: any) => {
+            let meta: Record<string, any> = {}
+            try {
+              if (c.notes && c.notes.startsWith('{')) meta = JSON.parse(c.notes)
+            } catch { }
+            return {
+              ...c,
+              nick_name: meta.nick_name || c.contact_person || '',
+              nic: meta.nic || '',
+              area: c.city || meta.area || '',
+              join_date: meta.join_date || (c.created_at ? c.created_at.split('T')[0] : ''),
+              payment_plan: meta.payment_plan || 'None',
+              discount_level: meta.discount_level || 'none',
+              dealer_code: meta.dealer_code || '',
+              sales_rep_id: meta.sales_rep_id || '',
+              sales_rep_name: meta.sales_rep_name || '',
+              vat_no: c.tax_number || meta.vat_no || '',
+              vat_percentage: meta.vat_percentage ?? 0,
+            }
+          })
+          return {
+            rows: rows as unknown as Customer[],
+            count: count ?? rows.length,
+          }
+        }
+      } catch {
+        // fallback to mock data
       }
+
+      return getMockCustomersPage(appliedSearch, page, pageSize)
     },
   })
 
@@ -149,28 +205,33 @@ export function CustomersPage() {
   const handleOpenEdit = (customer: Customer) => {
     setIsEditing(true)
     setModalError(null)
+    let meta: Record<string, any> = {}
+    try {
+      if (customer.notes && customer.notes.startsWith('{')) meta = JSON.parse(customer.notes)
+    } catch { }
+
     setFormData({
       id: customer.id,
       customer_code: customer.customer_code || '',
       name: customer.name || '',
-      nick_name: customer.nick_name || '',
-      nic: customer.nic || '',
+      nick_name: meta.nick_name || customer.nick_name || customer.contact_person || '',
+      nic: meta.nic || customer.nic || '',
       phone: customer.phone || '',
       alternate_phone: customer.alternate_phone || '',
       address: customer.address || '',
-      area: customer.area || customer.city || 'Dambulla',
+      area: customer.city || meta.area || customer.area || 'Dambulla',
       email: customer.email || '',
-      join_date: customer.join_date || (customer.created_at ? customer.created_at.split('T')[0] : '') || '',
-      payment_plan: customer.payment_plan || 'None',
+      join_date: meta.join_date || customer.join_date || (customer.created_at ? customer.created_at.split('T')[0] : '') || '',
+      payment_plan: meta.payment_plan || customer.payment_plan || 'None',
       customer_type: customer.customer_type || 'retail',
-      vat_no: customer.vat_no || customer.tax_number || '',
-      vat_percentage: customer.vat_percentage || 0,
-      discount_level: customer.discount_level || 'none',
+      vat_no: customer.tax_number || meta.vat_no || customer.vat_no || '',
+      vat_percentage: meta.vat_percentage ?? customer.vat_percentage ?? 0,
+      discount_level: meta.discount_level || customer.discount_level || 'none',
       credit_limit: customer.credit_limit || 0,
-      dealer_code: customer.dealer_code || '',
+      dealer_code: meta.dealer_code || customer.dealer_code || '',
       credit_days: customer.credit_days || 0,
-      sales_rep_id: customer.sales_rep_id || '',
-      sales_rep_name: customer.sales_rep_name || '',
+      sales_rep_id: meta.sales_rep_id || customer.sales_rep_id || '',
+      sales_rep_name: meta.sales_rep_name || customer.sales_rep_name || '',
       is_active: customer.is_active ?? true,
     })
     setShowModal(true)
@@ -183,42 +244,79 @@ export function CustomersPage() {
         throw new Error('Customer Name is required')
       }
 
-      const supabase = requireSupabase()
+      const extraMeta = {
+        nick_name: formData.nick_name.trim() || undefined,
+        nic: formData.nic.trim() || undefined,
+        area: formData.area.trim() || undefined,
+        join_date: formData.join_date || undefined,
+        payment_plan: formData.payment_plan || undefined,
+        discount_level: formData.discount_level || undefined,
+        dealer_code: formData.dealer_code.trim() || undefined,
+        sales_rep_id: formData.sales_rep_id || undefined,
+        sales_rep_name: formData.sales_rep_name || undefined,
+        vat_percentage: Number(formData.vat_percentage || 0) || undefined,
+        vat_no: formData.vat_no.trim() || undefined,
+      }
 
-      const payload = {
+      // Valid columns of public.customers ONLY
+      const payload: Record<string, unknown> = {
         name: formData.name.trim(),
-        nick_name: formData.nick_name.trim() || null,
-        nic: formData.nic.trim() || null,
+        contact_person: formData.nick_name.trim() || null,
         phone: formData.phone.trim() || null,
         alternate_phone: formData.alternate_phone.trim() || null,
         address: formData.address.trim() || null,
-        city: formData.area || null,
-        area: formData.area || null,
+        city: formData.area.trim() || null,
         email: formData.email.trim() || null,
-        join_date: formData.join_date || null,
-        payment_plan: formData.payment_plan || 'None',
-        customer_type: formData.customer_type || 'retail',
-        vat_no: formData.vat_no.trim() || null,
+        customer_type: formData.customer_type === 'wholesale' ? 'wholesale' : formData.customer_type === 'dealer' ? 'dealer' : 'retail',
         tax_number: formData.vat_no.trim() || null,
-        vat_percentage: Number(formData.vat_percentage || 0),
-        discount_level: formData.discount_level || 'none',
         credit_limit: Number(formData.credit_limit || 0),
-        dealer_code: formData.dealer_code.trim() || null,
         credit_days: Number(formData.credit_days || 0),
-        sales_rep_id: formData.sales_rep_id || null,
-        sales_rep_name: formData.sales_rep_name || null,
         is_active: formData.is_active,
+        notes: JSON.stringify(extraMeta),
       }
 
+      const supabase = requireSupabase()
+      const session = (await supabase.auth.getSession()).data.session
+
+      // In offline or demo/unauthenticated mode, update mock data directly
+      if (isBackendOffline() || !session) {
+        if (isEditing && formData.id) {
+          const idx = MOCK_CUSTOMERS.findIndex(c => c.id === formData.id)
+          if (idx >= 0 && MOCK_CUSTOMERS[idx]) {
+            MOCK_CUSTOMERS[idx] = {
+              ...MOCK_CUSTOMERS[idx],
+              name: formData.name.trim(),
+              phone: formData.phone.trim() || '',
+              email: formData.email.trim() || '',
+              address: formData.address.trim() || '',
+              credit_limit: Number(formData.credit_limit || 0),
+              is_active: formData.is_active,
+            }
+          }
+        } else {
+          MOCK_CUSTOMERS.unshift({
+            id: `cust-${Date.now()}`,
+            customer_code: formData.customer_code.trim() || `CUST-${Math.floor(1000 + Math.random() * 9000)}`,
+            name: formData.name.trim(),
+            phone: formData.phone.trim() || '',
+            email: formData.email.trim() || '',
+            address: formData.address.trim() || '',
+            credit_limit: Number(formData.credit_limit || 0),
+            current_balance: 0,
+            is_active: formData.is_active,
+          })
+        }
+        return
+      }
+
+      // Live Supabase update/insert
       if (isEditing && formData.id) {
-        // Update
         const { error } = await supabase
           .from('customers')
           .update(payload as never)
           .eq('id', formData.id)
         throwOnError(error)
       } else {
-        // Create
         const companyId = await currentCompanyId()
         const effectiveBranchId = branchId || ''
         if (!companyId || !effectiveBranchId) {
@@ -255,7 +353,14 @@ export function CustomersPage() {
   const deleteMutation = useMutation({
     mutationFn: async (customerId: string) => {
       const supabase = requireSupabase()
-      // Soft-delete or toggle status
+      const session = (await supabase.auth.getSession()).data.session
+      if (isBackendOffline() || !session) {
+        const idx = MOCK_CUSTOMERS.findIndex(c => c.id === customerId)
+        if (idx >= 0 && MOCK_CUSTOMERS[idx]) {
+          MOCK_CUSTOMERS[idx].is_active = false
+        }
+        return
+      }
       const { error } = await supabase
         .from('customers')
         .update({ is_active: false, deleted_at: new Date().toISOString() } as never)
